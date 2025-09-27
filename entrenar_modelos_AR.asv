@@ -1,0 +1,186 @@
+% entrenar_modelos_AR.m
+clear; clc; close all;
+cd(fileparts(mfilename('fullpath')));
+addpath('data');
+fprintf('Iniciando el entrenamiento de modelos predictivos AR...\n\n');
+
+%% --- 1. Carga y Preparación de Datos ---
+fprintf('Cargando y pre-procesando perfiles de entrada...\n');
+d_mr1_raw = load('data/winter_30D.mat').winter_30D;
+g_mr1_raw = load('data/pv_wint.mat').pv_wint * 22;
+d_mr2_raw = load('data/winter_60D.mat').winter_60D;
+g_mr2_raw = load('data/wind_inv.mat').wind_inv * 8.49;
+d_mr3_raw = load('data/School_inv.mat').School_inv * 0.45;
+g_mr3_raw = load('data/pv_wint.mat').pv_wint * 30 + load('data/wind_inv.mat').wind_inv * 5;
+h_mr1_raw = load('data/Dwellings30Water.mat').Dwellings30Water;
+h_mr2_raw = load('data/Dwellings60Water.mat').Dwellings60Water;
+h_mr3_raw = load('data/SchoolWater.mat').SchoolWater;
+
+% --- PASO 1: Submuestrear cada perfil por separado ---
+paso_mpc = 30;
+fprintf('Aplicando submuestreo a cada perfil individualmente...\n');
+d1_ts = submuestreo_max(d_mr1_raw, paso_mpc);
+d2_ts = submuestreo_max(d_mr2_raw, paso_mpc);
+d3_ts = submuestreo_max(d_mr3_raw, paso_mpc);
+
+g1_ts = submuestreo_max(g_mr1_raw, paso_mpc);
+g2_ts = submuestreo_max(g_mr2_raw, paso_mpc);
+g3_ts = submuestreo_max(g_mr3_raw, paso_mpc);
+
+h1_ts = submuestreo_max(h_mr1_raw, paso_mpc);
+h2_ts = submuestreo_max(h_mr2_raw, paso_mpc);
+h3_ts = submuestreo_max(h_mr3_raw, paso_mpc);
+
+% --- PASO 2: Encontrar la longitud mínima común y truncar ---
+min_len_ts = min([length(d1_ts), length(d2_ts), length(d3_ts), ...
+                   length(g1_ts), length(g2_ts), length(g3_ts), ...
+                   length(h1_ts), length(h2_ts), length(h3_ts)]);
+fprintf('Estandarizando todos los perfiles submuestreados a una longitud de %d muestras.\n', min_len_ts);
+
+% --- PASO 3: Concatenar las matrices finales (ahora con dimensiones consistentes) ---
+P_dem_ts = [d1_ts(1:min_len_ts), d2_ts(1:min_len_ts), d3_ts(1:min_len_ts)];
+P_gen_ts = [g1_ts(1:min_len_ts), g2_ts(1:min_len_ts), g3_ts(1:min_len_ts)];
+Q_dem_ts = [h1_ts(1:min_len_ts), h2_ts(1:min_len_ts), h3_ts(1:min_len_ts)];
+
+
+%% --- 2. Definición de Parámetros de Entrenamiento para Modelos AR ---
+params.P_dem.regresores = [48, 48, 46];
+params.P_gen.regresores = [48, 45, 46];
+params.Q_dem.regresores = [48, 48, 48];
+
+%% --- 3. Entrenamiento Automatizado de los 9 Modelos AR ---
+modelos = struct();
+tipos_de_senal = {'P_dem', 'P_gen', 'Q_dem'};
+datos_completos = {P_dem_ts, P_gen_ts, Q_dem_ts};
+for i = 1:3 
+    for j = 1:length(tipos_de_senal)
+        tipo_actual = tipos_de_senal{j};
+        datos_actuales = datos_completos{j};
+        num_regresores = params.(tipo_actual).regresores(i);
+        
+        fprintf('Entrenando modelo AR para %s de Micro-red %d... (Regresores: %d)\n', ...
+            tipo_actual, i, num_regresores);
+            
+        [train_inputs, train_outputs] = prepare_time_series_data(datos_actuales(:, i), num_regresores);
+        
+        X = [ones(size(train_inputs, 1), 1), train_inputs];
+        theta = X \ train_outputs; 
+        
+        nombre_modelo = sprintf('mg%d_%s_ar', i, tipo_actual);
+        modelos.(nombre_modelo).theta = theta;
+        modelos.(nombre_modelo).num_regresores = num_regresores;
+    end
+    fprintf('\n');
+end
+
+%% --- 4. Guardar Todos los Modelos ---
+if ~exist('models', 'dir'), mkdir('models'); end
+save('models/modelos_prediccion_AR.mat', 'modelos');
+fprintf('¡Entrenamiento completado! Modelos guardados en "models/modelos_prediccion_AR.mat"\n');
+
+
+%% --- FASE 5: VISUALIZACIÓN DE PREDICCIONES (CORREGIDO) ---
+fprintf('Generando gráficos de evaluación de predicciones...\n');
+
+% --- Lógica de Corrección ---
+% 1. Determinar el máximo historial necesario (warm-up period)
+max_lags = max([params.P_dem.regresores, params.P_gen.regresores, params.Q_dem.regresores]);
+
+% 2. Definir una ventana de visualización que comience DESPUÉS del warm-up
+duracion_plot_dias = 7;
+duracion_plot_muestras = duracion_plot_dias * 24 * (60 / paso_mpc);
+
+start_idx = max_lags + 1;
+end_idx = start_idx + duracion_plot_muestras - 1;
+
+% Asegurarse que hay suficientes datos para la ventana de visualización
+if end_idx > size(P_dem_ts, 1)
+    error('No hay suficientes datos para la ventana de visualización después del período de calentamiento.');
+end
+ventana_plot = start_idx:end_idx;
+
+% 3. Crear un eje de tiempo que empiece en 0 para la gráfica
+tiempo_plot = (0:duracion_plot_muestras-1) * (paso_mpc / 60);
+
+% Generar predicciones para la ventana seleccionada
+P_dem_pred = generar_predicciones_ventana(modelos, P_dem_ts, 'P_dem', ventana_plot);
+P_gen_pred = generar_predicciones_ventana(modelos, P_gen_ts, 'P_gen', ventana_plot);
+Q_dem_pred = generar_predicciones_ventana(modelos, Q_dem_ts, 'Q_dem', ventana_plot);
+
+% Graficar resultados usando la ventana de datos reales correspondiente
+plot_prediction_figure(tiempo_plot, P_dem_ts(ventana_plot,:), P_dem_pred, 'Demanda Eléctrica', 'Potencia [kW]', 'AR');
+plot_prediction_figure(tiempo_plot, P_gen_ts(ventana_plot,:), P_gen_pred, 'Generación Eléctrica', 'Potencia [kW]', 'AR');
+plot_prediction_figure(tiempo_plot, Q_dem_ts(ventana_plot,:), Q_dem_pred, 'Demanda Hídrica', 'Caudal [lt/s]', 'AR');
+
+fprintf('Gráficos de predicción generados y guardados en la carpeta "models".\n');
+
+
+%% --- Funciones Auxiliares ---
+function [inputs, outputs] = prepare_time_series_data(data, num_lags)
+    inputs = zeros(length(data) - num_lags, num_lags);
+    outputs = zeros(length(data) - num_lags, 1);
+    for i = 1:length(data) - num_lags
+        inputs(i, :) = data(i:i+num_lags-1)';
+        outputs(i) = data(i+num_lags);
+    end
+end
+
+function datos_submuestreados = submuestreo_max(datos, tamano_ventana)
+    num_ventanas = floor(length(datos) / tamano_ventana);
+    longitud_ajustada = num_ventanas * tamano_ventana;
+    datos_ajustados = datos(1:longitud_ajustada);
+    matriz_datos = reshape(datos_ajustados, tamano_ventana, num_ventanas);
+    datos_submuestreados = max(matriz_datos, [], 1)';
+end
+
+function predicciones = generar_predicciones_ventana(modelos, datos_reales, tipo_senal, ventana)
+    num_mg = size(datos_reales, 2);
+    predicciones = NaN(length(ventana), num_mg);
+    
+    for i = 1:num_mg
+        nombre_modelo = sprintf('mg%d_%s_ar', i, tipo_senal);
+        modelo_actual = modelos.(nombre_modelo);
+        theta = modelo_actual.theta;
+        num_lags = modelo_actual.num_regresores;
+        
+        for k_idx = 1:length(ventana)
+            k = ventana(k_idx); % k es el índice real en la matriz de datos_reales
+            % La historia se toma de los datos ANTERIORES al punto k
+            historia = datos_reales(k-num_lags : k-1, i)';
+            entrada = [1, historia];
+            predicciones(k_idx, i) = entrada * theta;
+        end
+    end
+end
+
+function plot_prediction_figure(t, datos_reales, datos_predichos, titulo_base, ylabel_text, tipo_modelo)
+    fig = figure('Name', [titulo_base ' (' tipo_modelo ')'], 'Position', [100, 100, 900, 700]);
+    
+    leyendas = {'Datos reales', 'Predicción'};
+    
+    for i = 1:3
+        subplot(3, 1, i);
+        hold on;
+        % Dividimos por 1000 los datos de potencia para mostrarlos en kW
+        if strcmp(ylabel_text, 'Potencia [kW]')
+            plot(t, datos_reales(:, i) / 1000, 'b.', 'DisplayName', leyendas{1});
+            plot(t, datos_predichos(:, i) / 1000, 'r-', 'LineWidth', 1.5, 'DisplayName', leyendas{2});
+        else
+            plot(t, datos_reales(:, i), 'b.', 'DisplayName', leyendas{1});
+            plot(t, datos_predichos(:, i), 'r-', 'LineWidth', 1.5, 'DisplayName', leyendas{2});
+        end
+        hold off;
+        
+        title(sprintf('%s Micro-red %d', strrep(titulo_base, 'Eléctrica', 'Eléctrica'), i));
+        ylabel(ylabel_text);
+        grid on; box on;
+        legend('Location', 'best');
+        xlim([t(1), t(end)]);
+    end
+    
+    xlabel('Tiempo [hrs]');
+    
+    filename_base = sprintf('models/Prediccion_%s_%s', strrep(titulo_base, ' ', '_'), tipo_modelo);
+    saveas(fig, [filename_base '.png']);
+    savefig(fig, [filename_base '.fig']);
+end
