@@ -6,12 +6,12 @@ function [P_dem_sim, P_gen_sim, Q_dem_sim, P_dem_train, P_gen_train, Q_dem_train
     addpath('data');
 
     % --- Carga de datos crudos (raw) ---
-    d_mr1_raw = load('data/winter_30D.mat').winter_30D;
-    g_mr1_raw = load('data/pv_wint.mat').pv_wint * 22;
-    d_mr2_raw = load('data/winter_60D.mat').winter_60D;
-    g_mr2_raw = load('data/wind_inv.mat').wind_inv * 8.49;
-    d_mr3_raw = load('data/School_inv.mat').School_inv * 0.45;
-    g_mr3_raw = load('data/pv_wint.mat').pv_wint * 30 + load('data/wind_inv.mat').wind_inv * 5;
+    d_mr1_raw = load('data/winter_30D.mat').winter_30D/1000;
+    g_mr1_raw = (load('data/pv_wint.mat').pv_wint * 22)/1000;
+    d_mr2_raw = load('data/winter_60D.mat').winter_60D/1000;
+    g_mr2_raw = (load('data/wind_inv.mat').wind_inv * 8.49)/1000;
+    d_mr3_raw = (load('data/School_inv.mat').School_inv * 0.45)/1000;
+    g_mr3_raw = (load('data/pv_wint.mat').pv_wint * 30 + load('data/wind_inv.mat').wind_inv * 5)/1000;
     h_mr1_raw = load('data/Dwellings30Water.mat').Dwellings30Water;
     h_mr2_raw = load('data/Dwellings60Water.mat').Dwellings60Water;
     h_mr3_raw = load('data/SchoolWater.mat').SchoolWater;

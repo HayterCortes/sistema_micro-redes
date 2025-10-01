@@ -55,5 +55,5 @@ if ~exist('results_mpc', 'dir'), mkdir('results_mpc'); end
 save('results_mpc/resultados_mpc_3mg_7dias.mat', ...
      'SoC', 'V_tank', 'P_grid', 'Q_p', 'Q_DNO', 'P_pump' ,'V_aq', 'h_p', 'Q_t', 'mg');
 fprintf('Resultados guardados en results_mpc/resultados_mpc_3mg_7dias.mat\n');
-plot_resultados_mpc(mg, SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, Q_t);
+plot_resultados_mpc(mg, SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, Q_t, h_p);
 fprintf('Gráficos generados y guardados en la carpeta results_mpc.\n');

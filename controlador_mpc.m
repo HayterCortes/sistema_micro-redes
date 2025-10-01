@@ -1,17 +1,19 @@
-% controlador_mpc.m
 function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_gen_pred, q_dem_pred, q_p_hist_0, p_mgref_hist_0, k_mpc_actual, Q_p_hist_mpc)
     
     %% --- 1. Parámetros ---
     N = mg(1).N; Ts = mg(1).Ts_mpc; num_mg = length(mg);
     C_p = 110; C_q = 644; lambda_P = 1e-1; lambda_Q = 1e-1;
     costo_shed_P = 1e7; costo_shed_Q = 1e7; costo_slack_EAW = 1e9;
-    costo_slack_s_pozo = 1e8; 
-
+    costo_slack_s_pozo = 1e3; 
+    
     % Parámetros del acuífero para el descenso del pozo ---
     S = mg(1).S_aq;      
     T = mg(1).T_aq;      
     r_p = mg(1).r_p;     
-    s_max = mg(1).s_max; 
+    s_max = mg(1).s_max;
+    
+    % Horizonte histórico para el cálculo del descenso (NUEVO PARÁMETRO)
+    H_hist = 48; % Ventana de 24 horas (48 pasos de 30 min)
     
     %% --- 2. Variables de Optimización ---
     P_mgref = sdpvar(N, num_mg, 'full'); Q_p = sdpvar(N, num_mg, 'full');
@@ -42,26 +44,34 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
         for i = 1:num_mg
             descenso_sum = 0;
             
+            % ===== INICIO DEL BLOQUE DE CÓDIGO MODIFICADO =====
+            % --- 1. CÁLCULO DE EFECTOS HISTÓRICOS (LÓGICA CORREGIDA CON VENTANA MÓVIL) ---
             if k_mpc_actual > 1
-                % --- MODIFICACIÓN: Se añade lógica if/else para el caso k_mpc_actual = 2 ---
-                if k_mpc_actual == 2
-                    % En el segundo paso, la única historia es el primer valor
-                    delta_Q_p_hist = Q_p_hist_mpc(1,:);
-                else % k_mpc_actual > 2
-                    % A partir del tercer paso, se puede calcular la diferencia
-                    delta_Q_p_hist = [Q_p_hist_mpc(1,:); diff(Q_p_hist_mpc(1:k_mpc_actual-1,:))];
-                end
+                % Define el inicio de la ventana histórica relevante
+                l_start = max(1, k_mpc_actual - H_hist); 
                 
-                for l = 1:(k_mpc_actual - 1)
-                    u_hist = (S * r_p^2) / (4 * T * (k_mpc_actual - l + k) * Ts);
-                    descenso_sum = descenso_sum + (delta_Q_p_hist(l,i)/1000) * well_function(u_hist);
+                % Itera solo sobre el historial reciente
+                for l = l_start:(k_mpc_actual - 1)
+                    % Calcula el cambio en el bombeo (delta_Q) para el paso histórico 'l'
+                    if l == 1
+                        delta_Q_l = Q_p_hist_mpc(l, i); % Cambio desde Q_p(0)=0
+                    else
+                        delta_Q_l = Q_p_hist_mpc(l, i) - Q_p_hist_mpc(l-1, i);
+                    end
+
+                    % Calcula el tiempo total de influencia en pasos
+                    tiempo_pasos = (k_mpc_actual - l) + k;
+                    u_hist = (S * r_p^2) / (4 * T * tiempo_pasos * Ts);
+                    descenso_sum = descenso_sum + (delta_Q_l / 1000) * well_function(u_hist);
                 end
             end
             
+            % --- 2. CÁLCULO DE EFECTOS FUTUROS (LÓGICA ORIGINAL, SE MANTIENE) ---
             for l = 1:k
                  u_futuro = (S * r_p^2) / (4 * T * (k - l + 1) * Ts);
                  descenso_sum = descenso_sum + (delta_Q_p_futuro(l,i)/1000) * well_function(u_futuro);
             end
+            % ===== FIN DEL BLOQUE DE CÓDIGO MODIFICADO =====
             
             constraints = [constraints, s_pozo(k,i) == (1 / (4*pi*T)) * descenso_sum];
             constraints = [constraints, 0 <= s_pozo(k,i) <= s_max + slack_s_pozo(k,i)]; 
@@ -100,7 +110,6 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
             delta_P = P_mgref(k,:) - P_mgref(k-1,:); 
             delta_Q = Q_p(k,:) - Q_p(k-1,:); 
         end
-
         costo_suavizado = lambda_P * sum(delta_P.^2) + lambda_Q * sum(delta_Q.^2);
         costo_penalizacion_P = costo_shed_P * sum(P_shed(k,:)) * (Ts/3600);
         costo_penalizacion_Q = costo_shed_Q * sum(Q_shed(k,:)) * Ts / 1000;
@@ -116,7 +125,7 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
     objective = objective + costo_slack_EAW * slack_EAW + costo_slack_s_pozo * sum(sum(slack_s_pozo));
     
     %% --- 4. Resolución ---
-    options = sdpsettings('verbose', 0, 'solver', 'gurobi');
+    options = sdpsettings('verbose', 2, 'debug', 1, 'solver', 'gurobi');
     sol = optimize(constraints, objective, options);
     
     if sol.problem == 0

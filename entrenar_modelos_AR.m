@@ -139,8 +139,8 @@ function plot_prediction_figure(t, datos_reales, datos_predichos, titulo_base, y
         subplot(3, 1, i);
         hold on;
         if strcmp(ylabel_text, 'Potencia [kW]')
-            plot(t, datos_reales(:, i) / 1000, 'b.', 'DisplayName', leyendas{1});
-            plot(t, datos_predichos(:, i) / 1000, 'r-', 'LineWidth', 1.5, 'DisplayName', leyendas{2});
+            plot(t, datos_reales(:, i) , 'b.', 'DisplayName', leyendas{1});
+            plot(t, datos_predichos(:, i) , 'r-', 'LineWidth', 1.5, 'DisplayName', leyendas{2});
         else
             plot(t, datos_reales(:, i), 'b.', 'DisplayName', leyendas{1});
             plot(t, datos_predichos(:, i), 'r-', 'LineWidth', 1.5, 'DisplayName', leyendas{2});

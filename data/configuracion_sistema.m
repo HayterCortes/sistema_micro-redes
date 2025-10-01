@@ -70,5 +70,6 @@ function mg = configuracion_sistema()
         mg(i).h_Tank_max = 3.6508;   % Altura máx. estanque [m] (Tabla 5.4)
         mg(i).Q_t_min = -100;        % Caudal mín. de intercambio [L/s] (Tabla 5.4)
         mg(i).Q_t_max = 100;         % Caudal máx. de intercambio [L/s] (Tabla 5.4)
+        mg(i).s_max = 8;
     end
 end

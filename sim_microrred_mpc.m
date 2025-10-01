@@ -83,7 +83,7 @@ function [SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, h_p, Q_t] = sim_microrr
             e_mg_i = P_mgref_k(i) - P_net_i;
             P_B_actual = sim_energia_local_tesis(mg(i), e_mg_i, SoC(k,i), Ts_sim);
             SoC(k+1, i) = SoC(k, i) - (P_B_actual * Ts_sim / 3600) / mg(i).E_batt_max;
-            SoC(k+1, i) = min(max(SoC(k+1, i), mg(i).SoC_min), mg(i).SoC_max);
+            SoC(k+1, i) = min(max(SoC(k+1, i), mg(i).SoC_min + 1e-5), mg(i).SoC_max - 1e-5);
             P_grid(k, i) = P_net_i - P_B_actual;
             
             % Capa Hídrica
