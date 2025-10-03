@@ -8,7 +8,7 @@ function [Q_Tank_final] = sim_agua_local_tesis(mg_params, V_Tank_actual, Q_p_mpc
     % Extraer parámetros
     V_Tank_max = mg_params.V_max;
     
-    % Calcular el caudal neto PREVIO según las órdenes del MPC (Ecuación 4.72) 
+    % Calcular el caudal neto previo según las órdenes del MPC (Ecuación 4.72) 
     Q_Tank_previo = Q_p_mpc + Q_buy_mpc - Q_t_mpc - Q_L_medido;
 
     % Aplicar el set de reglas de seguridad del estanque (Ecuación 4.73) 

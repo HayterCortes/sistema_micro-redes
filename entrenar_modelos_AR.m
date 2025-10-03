@@ -86,10 +86,9 @@ end
 %% --- 4. Guardar Todos los Modelos ---
 if ~exist('models', 'dir'), mkdir('models'); end
 save('models/modelos_prediccion_AR.mat', 'modelos');
-fprintf('¡Entrenamiento completado! Modelos guardados en "models/modelos_prediccion_AR.mat"\n\n');
+fprintf('Entrenamiento completado. Modelos guardados en "models/modelos_prediccion_AR.mat"\n\n');
 
 %% --- FASE 5: VISUALIZACIÓN DE PREDICCIONES (SOBRE CONJUNTO DE PRUEBA) ---
-% (Esta sección ahora proporciona una evaluación honesta del rendimiento del modelo final)
 fprintf('Generando gráficos de evaluación sobre el conjunto de prueba no visto...\n');
 full_ts_data = {[P_dem_train; P_dem_val; P_dem_test], [P_gen_train; P_gen_val; P_gen_test], [Q_dem_train; Q_dem_val; Q_dem_test]};
 test_sets = {P_dem_test, P_gen_test, Q_dem_test};

@@ -1,4 +1,3 @@
-% sim_microrred_mpc.m
 function [SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, h_p, Q_t] = sim_microrred_mpc(mg, P_dem, P_gen, Q_dem, hist_arranque)
     
     %% --- 1. Extracción de Parámetros y Preparación ---
@@ -19,6 +18,7 @@ function [SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, h_p, Q_t] = sim_microrr
     % Variables para Zero-Order Hold de acciones del MPC
     P_mgref_k = zeros(1, num_mg); Q_p_k = zeros(1, num_mg);
     Q_buy_k = zeros(1, num_mg); Q_t_k = zeros(1, num_mg);
+    s_pozo_k = zeros(1, num_mg); 
     
     % Historial de bombeo para el modelo de descenso ---
     Q_p_hist_mpc = zeros(ceil(Nt_sim / paso_mpc_en_sim), num_mg);
@@ -30,21 +30,14 @@ function [SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, h_p, Q_t] = sim_microrr
             k_mpc = (k - 1) / paso_mpc_en_sim + 1;
             fprintf('Ejecutando MPC Supervisor en t = %.1f horas... (k_mpc = %d)\n', (k-1)*Ts_sim/3600, k_mpc);
             
-            % --- MODIFICACIÓN: Lógica de Ventana Deslizante para el historial ---
-            % Se construye un historial completo juntando el arranque con los datos ya simulados,
-            % y luego se toman las últimas 'max_lags' muestras.
-            
-            % Submuestrear los datos de simulación disponibles hasta el momento
+            % --- Ventana Deslizante para el historial ---
             datos_sim_sub.P_dem = submuestreo_max(P_dem(1:k, :), paso_mpc_en_sim);
             datos_sim_sub.P_gen = submuestreo_max(P_gen(1:k, :), paso_mpc_en_sim);
             datos_sim_sub.Q_dem = submuestreo_max(Q_dem(1:k, :), paso_mpc_en_sim);
-
-            % Combinar el historial de arranque con los nuevos datos submuestreados
             hist_completo.P_dem = [hist_arranque.P_dem; datos_sim_sub.P_dem];
             hist_completo.P_gen = [hist_arranque.P_gen; datos_sim_sub.P_gen];
             hist_completo.Q_dem = [hist_arranque.Q_dem; datos_sim_sub.Q_dem];
             
-            % Seleccionar las últimas 'max_lags' muestras para la predicción
             hist_data.P_dem = hist_completo.P_dem(end - mg(1).max_lags_mpc + 1:end, :);
             hist_data.P_gen = hist_completo.P_gen(end - mg(1).max_lags_mpc + 1:end, :);
             hist_data.Q_dem = hist_completo.Q_dem(end - mg(1).max_lags_mpc + 1:end, :);
@@ -65,6 +58,8 @@ function [SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, h_p, Q_t] = sim_microrr
                 Q_p_k = u_mpc.Q_p;
                 Q_buy_k = u_mpc.Q_buy; 
                 Q_t_k = u_mpc.Q_t;
+                % --- CORRECCIÓN --- Se captura el valor de s_pozo calculado por el MPC.
+                s_pozo_k = u_mpc.s_pozo;
                 Q_p_hist_mpc(k_mpc, :) = Q_p_k;
             else
                 fprintf('MPC falló. Manteniendo la última acción.\n');
@@ -99,5 +94,9 @@ function [SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, h_p, Q_t] = sim_microrr
         recarga_total = (mg(1).Rp * (Ts_sim / 60));
         bombeo_total = sum(Q_p_k) * Ts_sim;
         V_aq(k+1) = max(V_aq(k) + recarga_total - bombeo_total, 0);
+        
+        % --- Se actualiza el estado h_p en cada paso de la simulación.
+        % Se usa la Ecuación 4.15 de la tesis: h_p(t) = h_p(0) + s(t)
+        h_p(k+1, :) = mg(1).h_p0 + s_pozo_k;
     end
 end

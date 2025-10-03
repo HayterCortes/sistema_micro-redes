@@ -1,4 +1,4 @@
-# --- run_lime_case1_60viviendas.py ---
+# --- run_lime_case2_cooperacion.py ---
 
 import numpy as np
 from scipy.io import loadmat
@@ -19,7 +19,7 @@ X_original = None
 mg = None
 P_dem_pred_real, P_gen_pred_real, Q_dem_pred_real = None, None, None
 q_p_hist_0_real, p_mgref_hist_0_real, k_instance_mpc, Q_p_hist_mpc_real = None, None, None, None
-scaler = None # Scaler también se hará global para que la función de predicción lo use
+scaler = None
 
 def funcion_prediccion_mpc(muestras_perturbadas_std):
     """
@@ -53,10 +53,10 @@ def funcion_prediccion_mpc(muestras_perturbadas_std):
             q_p_hist_0_real, p_mgref_hist_0_real, k_instance_mpc, Q_p_hist_mpc_real
         )
 
-        if u_opt and 'Q_p' in u_opt and u_opt['Q_p'].size > 0:
-            # --- CAMBIO: CASO DE ESTUDIO 1 ---
-            # Explicar la decisión de la Microgrid 2 (60 Viviendas)
-            decisiones.append(u_opt['Q_p'][1]) 
+        if u_opt and 'Q_t' in u_opt and u_opt['Q_t'].size > 0:
+            # --- CAMBIO: CASO DE ESTUDIO 2 ---
+            # Explicar la decisión de transferencia de la Microgrid 3 (Escuela)
+            decisiones.append(u_opt['Q_t'][2]) 
         else:
             decisiones.append(0)
     
@@ -69,12 +69,10 @@ def objective(trial):
     """
     global scaler
     
-    # 1. Sugerir los hiperparámetros
     num_samples = trial.suggest_int('num_samples', 30, 80)
     perturbation_strength = trial.suggest_float('perturbation_strength', 0.15, 0.6)
     kernel_width = trial.suggest_float('kernel_width', 0.2, 0.9)
 
-    # 2. Ejecutar el proceso de LIME
     ruido = 1 + perturbation_strength * (2 * np.random.rand(num_samples, len(X_original)) - 1)
     X_train_lime = X_original * ruido
     
@@ -84,7 +82,6 @@ def objective(trial):
     
     y_labels = funcion_prediccion_mpc(X_train_lime_std)
 
-    # 3. Ajustar modelo local y calcular fidelidad (R²)
     distances = np.linalg.norm(X_train_lime_std - X_original_std, axis=1)
     weights = np.sqrt(np.exp(-(distances ** 2) / kernel_width ** 2))
 
@@ -105,18 +102,25 @@ if __name__ == '__main__':
     import multiprocessing
     multiprocessing.set_start_method("spawn", force=True)
 
-    # --- CAMBIO: CASO DE ESTUDIO 1 ---
-    # Definir los parámetros para la búsqueda del evento
-    TARGET_HOUR = 35
+    # --- CAMBIO: CASO DE ESTUDIO 2 ---
+    # Definir los parámetros para la búsqueda del evento de cooperación
+    TARGET_HOUR = 105
     SEARCH_WINDOW_HOURS = 5
-    TARGET_MG_INDEX = 1 # 0: 30 Viv, 1: 60 Viv, 2: Escuela
-    TARGET_MG_NAME = "60 Viviendas"
+    TARGET_MG_INDEX = 2 # 0: 30 Viv, 1: 60 Viv, 2: Escuela
+    TARGET_MG_NAME = "Escuela"
 
-    # --- PASOS 1, 2, 3: Carga, Selección y Reconstrucción ---
-    print(f'--- PASO 1-3: Reconstruyendo estado para el bombeo de "{TARGET_MG_NAME}" en t≈{TARGET_HOUR}h ---')
+    globals_to_update = [
+        'X_original', 'mg', 'P_dem_pred_real', 'P_gen_pred_real', 'Q_dem_pred_real',
+        'q_p_hist_0_real', 'p_mgref_hist_0_real', 'k_instance_mpc', 'Q_p_hist_mpc_real', 'scaler'
+    ]
+    for var in globals_to_update: globals()[var] = None
+
+    print(f'--- PASO 1-3: Reconstruyendo estado para la cooperación de "{TARGET_MG_NAME}" en t≈{TARGET_HOUR}h ---')
     results = loadmat('results_mpc/resultados_mpc_3mg_7dias.mat')
-    Q_p_log, P_grid_log, SoC_log, V_tank_log, V_aq_log = \
-        results['Q_p'], results['P_grid'], results['SoC'], results['V_tank'], results['V_aq']
+    # --- CAMBIO: CASO DE ESTUDIO 2 ---
+    # Cargar el log de transferencia de agua (Q_t)
+    Q_p_log, P_grid_log, SoC_log, V_tank_log, V_aq_log, Q_t_log = \
+        results['Q_p'], results['P_grid'], results['SoC'], results['V_tank'], results['V_aq'], results['Q_t']
     mg = results['mg']
     modelos_predictivos = loadmat('models/modelos_prediccion_AR.mat')['modelos']
     
@@ -124,20 +128,20 @@ if __name__ == '__main__':
     Ts_sim = mg['Ts_sim'][0,0][0,0]
     paso_mpc_en_sim = int(Ts_mpc / Ts_sim)
     max_lags = int(mg['max_lags_mpc'][0,0][0,0])
-    N = int(mg['N'][0,0][0,0]
-    )
-    # --- CAMBIO: CASO DE ESTUDIO 1 ---
-    # Lógica para encontrar el pico de bombeo en la ventana de tiempo deseada
+    N = int(mg['N'][0,0][0,0])
+    
+    # --- CAMBIO: CASO DE ESTUDIO 2 ---
+    # Lógica para encontrar un evento de transferencia positiva (envío de agua)
     target_step_sim = int(TARGET_HOUR * 3600 / Ts_sim)
     window_sim_steps = int(SEARCH_WINDOW_HOURS * 3600 / Ts_sim)
     search_start = max(0, target_step_sim - window_sim_steps)
-    search_end = min(len(Q_p_log), target_step_sim + window_sim_steps)
+    search_end = min(len(Q_t_log), target_step_sim + window_sim_steps)
 
-    pumping_window = Q_p_log[search_start:search_end, TARGET_MG_INDEX]
-    if np.max(pumping_window) < 0.01:
-        raise ValueError(f"No se encontró un evento de bombeo significativo para {TARGET_MG_NAME} cerca de la hora {TARGET_HOUR}.")
+    transfer_window = Q_t_log[search_start:search_end, TARGET_MG_INDEX]
+    if np.max(transfer_window) < 0.1: # Umbral para una transferencia significativa
+        raise ValueError(f"No se encontró un evento de cooperación significativo para {TARGET_MG_NAME} cerca de la hora {TARGET_HOUR}.")
     
-    local_peak_idx = np.argmax(pumping_window)
+    local_peak_idx = np.argmax(transfer_window)
     k_instance_sim = search_start + local_peak_idx
     
     k_instance_mpc = int(np.floor((k_instance_sim - 1) / paso_mpc_en_sim) + 1)
@@ -176,25 +180,21 @@ if __name__ == '__main__':
         np.sum(Q_dem_pred_real[:steps_4h, :])*Ts_mpc, np.sum(Q_dem_pred_real[:steps_12h, :])*Ts_mpc
     ])
     
-    Qp_real = Q_p_log[idx_sim_mpc_start, TARGET_MG_INDEX]
+    Qt_real = Q_t_log[idx_sim_mpc_start, TARGET_MG_INDEX]
     hora_evento = idx_sim_mpc_start * Ts_sim / 3600
     print(f'Instancia a explicar encontrada en t={hora_evento:.2f}h (Paso MPC {k_instance_mpc}).')
-    print(f'Decisión real: Bombeo de {TARGET_MG_NAME} = {Qp_real:.4f} [L/s]')
+    print(f'Decisión real: Cooperación de {TARGET_MG_NAME} = {Qt_real:.4f} [L/s] (Positivo=Enviar)')
     print('--- Reconstrucción completada. Iniciando optimización de hiperparámetros... ---\n')
     
-    # --- EJECUCIÓN DEL ESTUDIO DE OPTIMIZACIÓN ---
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=30, n_jobs=4)
     
-    # --- RESULTADOS DE LA OPTIMIZACIÓN ---
     print("\n\n--- OPTIMIZACIÓN DE HIPERPARÁMETROS COMPLETADA ---")
     print(f"Mejor valor de Fidelidad (R²): {study.best_value:.4f}")
     print("Mejores Hiperparámetros encontrados:")
     best_params = study.best_params
-    for key, value in best_params.items():
-        print(f"  - {key}: {value:.4f}" if isinstance(value, float) else f"  - {key}: {value}")
+    for key, value in best_params.items(): print(f"  - {key}: {value:.4f}" if isinstance(value, float) else f"  - {key}: {value}")
     
-    # --- EJECUCIÓN FINAL DE LIME CON LOS MEJORES PARÁMETROS ---
     print("\n\n--- EJECUTANDO ANÁLISIS FINAL DE LIME CON PARÁMETROS ÓPTIMOS ---")
     NUM_FEATURES_TO_EXPLAIN = 6
     scaler = StandardScaler()
@@ -212,11 +212,8 @@ if __name__ == '__main__':
             'P_gen_avg_4h (kW)', 'P_gen_avg_12h (kW)',
             'Q_dem_sum_4h (L)', 'Q_dem_sum_12h (L)'
         ],
-        class_names=[f'Bombeo {TARGET_MG_NAME} (L/s)'],
-        mode='regression',
-        discretize_continuous=False,
-        kernel_width=best_params['kernel_width'],
-        verbose=False
+        class_names=[f'Cooperación {TARGET_MG_NAME} (L/s)'],
+        mode='regression', kernel_width=best_params['kernel_width']
     )
     
     explanation = explainer.explain_instance(
@@ -226,12 +223,12 @@ if __name__ == '__main__':
     )
     
     print(f'\n--- EXPLICACIÓN DE LA DECISIÓN (TOP {NUM_FEATURES_TO_EXPLAIN} FACTORES) ---')
-    print(f'La decisión de bombear {Qp_real:.4f} [L/s] para "{TARGET_MG_NAME}" se debió principalmente a los siguientes factores:\n')
-    print('-' * 75)
-    print(f'{"Característica":<25} | {"Coeficiente (w)":<20} | {"Influencia en Bombeo"}')
-    print('-' * 75)
+    print(f'La decisión de transferir {Qt_real:.4f} [L/s] desde "{TARGET_MG_NAME}" se debió a los siguientes factores:\n')
+    print('-' * 80)
+    print(f'{"Característica":<25} | {"Coeficiente (w)":<20} | {"Influencia en Transferencia (Enviar)"}')
+    print('-' * 80)
     explanation_list = explanation.as_list()
     for feature, weight in explanation_list:
-        influencia = "➡️ AUMENTA" if weight > 0 else "⬅️ REDUCE"
+        influencia = "➡️ AUMENTA el envío" if weight > 0 else "⬅️ REDUCE el envío"
         print(f"{feature:<25} | {weight:<20.4f} | {influencia}")
-    print('-' * 75)
+    print('-' * 80)

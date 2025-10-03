@@ -5,7 +5,6 @@
 clear; clc; close all;
 
 % --- 1. Carga de datos crudos (raw) ---
-% Asegúrate de que la carpeta 'data' esté en la ruta o en el mismo directorio.
 fprintf('--- Cargando datos crudos de 90 días ---\n');
 addpath('data');
 
@@ -46,7 +45,7 @@ for i = 1:3
     
     % Formato del gráfico
     title(titulos{i});
-    ylabel('Potencia [kW]');
+    ylabel('Potencia [W]');
     grid on;
     box on;
     legend('show', 'Location', 'northeast');

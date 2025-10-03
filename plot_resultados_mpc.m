@@ -164,7 +164,7 @@ function plot_resultados_mpc(mg, SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, 
     
     %% --- 3. NUEVOS GRÁFICOS SUGERIDOS ---
     
-    % NUEVO Gráfico 9: Descenso del Nivel del Pozo (Drawdown)
+    % Gráfico 9: Descenso del Nivel del Pozo (Drawdown)
     fig9 = figure('Name', 'Descenso Pozo (MPC)', 'Position', [100, 100, 800, 700]);
     sgtitle('Descenso del Nivel del Pozo (Drawdown)');
     for i = 1:n_mg
@@ -187,7 +187,7 @@ function plot_resultados_mpc(mg, SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, 
     print(fig9, filename9, '-depsc');
     savefig(fig9, [filename9 '.fig']);
 
-    % NUEVO Gráfico 10: Recursos Totales Comprados al DNO
+    % Gráfico 10: Recursos Totales Comprados al DNO
     fig10 = figure('Name', 'Recursos Totales DNO (MPC)', 'Position', [100, 100, 800, 600]);
     sgtitle('Recursos Totales Comprados a la Red Externa (DNO)');
     
@@ -219,7 +219,7 @@ function plot_resultados_mpc(mg, SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, 
     print(fig10, filename10, '-depsc');
     savefig(fig10, [filename10 '.fig']);
 
-    % NUEVO Gráfico 11: Costo de Operación Acumulado
+    % Gráfico 11: Costo de Operación Acumulado
     fig11 = figure('Name', 'Costo Acumulado (MPC)');
     C_p = 110; % [CLP/kWh]
     C_q = 644; % [CLP/m^3]
