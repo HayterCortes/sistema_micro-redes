@@ -1,5 +1,9 @@
-function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_gen_pred, q_dem_pred, q_p_hist_0, p_mgref_hist_0, k_mpc_actual, Q_p_hist_mpc)
+% --- controlador_mpc.m (Versión Corregida) ---
+function [u_opt] = controlador_mpc(soC_0, v_tank_0, v_aq_0, p_dem_pred, p_gen_pred, q_dem_pred, q_p_hist_0, p_mgref_hist_0, k_mpc_actual, Q_p_hist_mpc)
     
+    %% --- CAMBIO CLAVE: Cargar configuración internamente ---
+    mg = configuracion_sistema();
+
     %% --- 1. Parámetros ---
     N = mg(1).N; Ts = mg(1).Ts_mpc; num_mg = length(mg);
     C_p = 110; C_q = 644; lambda_P = 1e-1; lambda_Q = 1e-1;
@@ -12,8 +16,7 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
     r_p = mg(1).r_p;     
     s_max = mg(1).s_max;
     
-    % Horizonte histórico para el cálculo del descenso 
-    H_hist = 48; % Ventana de 24 horas (48 pasos de 30 min)
+    H_hist = 48;
     
     %% --- 2. Variables de Optimización ---
     P_mgref = sdpvar(N, num_mg, 'full'); Q_p = sdpvar(N, num_mg, 'full');
@@ -23,7 +26,6 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
     EAW     = sdpvar(N+1, 1, 'full');
     s_pozo  = sdpvar(N, num_mg, 'full'); 
     
-    % Variables de Holgura (Slack)
     slack_EAW = sdpvar(1, 1, 'full'); P_shed = sdpvar(N, num_mg, 'full'); Q_shed = sdpvar(N, num_mg, 'full');
     slack_s_pozo = sdpvar(N, num_mg, 'full');
     
@@ -40,7 +42,6 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
     end
     
     for k = 1:N 
-        
         for i = 1:num_mg
             descenso_sum = 0; 
             if k_mpc_actual > 1
@@ -113,17 +114,14 @@ function [u_opt] = controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, p_dem_pred, p_ge
     objective = objective + costo_slack_EAW * slack_EAW + costo_slack_s_pozo * sum(sum(slack_s_pozo));
     
     %% --- 4. Resolución ---
-    options = sdpsettings('verbose', 2, 'debug', 1, 'solver', 'gurobi');
+    options = sdpsettings('verbose', 0); % Verbose 0 para evitar impresiones en la consola
     sol = optimize(constraints, objective, options);
     
     if sol.problem == 0
         u_opt.P_mgref = value(P_mgref(1,:)); u_opt.Q_p = value(Q_p(1,:));
         u_opt.Q_buy = value(Q_buy(1,:)); u_opt.Q_t = value(Q_t(1,:));
         u_opt.s_pozo = value(s_pozo(1,:));
-        if value(slack_EAW) > 1e-3, fprintf('ALERTA: Sostenibilidad del acuífero violada en %.2f L.\n', value(slack_EAW)); end
     else
-        yalmip_error_text = yalmiperror(sol.problem);
-        fprintf('Error YALMIP: %s\n', yalmip_error_text);
         u_opt = [];
     end
 end

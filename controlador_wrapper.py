@@ -1,26 +1,23 @@
-# --- controlador_wrapper.py ---
+# --- controlador_wrapper.py (Versión Corregida Definitiva) ---
 import matlab.engine
 import numpy as np
 import os
 
-def llamar_controlador_mpc(mg, soC_0, v_tank_0, v_aq_0, 
+def llamar_controlador_mpc(soC_0, v_tank_0, v_aq_0, 
                            p_dem_pred, p_gen_pred, q_dem_pred, 
                            q_p_hist_0, p_mgref_hist_0,
                            k_mpc_actual, Q_p_hist_mpc):
     """
-    Wrapper para llamar a la función de MATLAB 'controlador_mpc', ahora incluyendo
-    todos los historiales necesarios para una ejecución fiel.
+    Wrapper para llamar a la función de MATLAB 'controlador_mpc'.
+    Añade conversión explícita de escalares para máxima compatibilidad.
     """
     eng = None
     try:
-        # Iniciar el motor de MATLAB
         eng = matlab.engine.start_matlab()
-
-        # Añadir rutas necesarias al path de MATLAB
         project_path = os.getcwd()
         eng.addpath(eng.genpath(project_path), nargout=0)
         
-        # --- Conversión de Datos de Python/NumPy a Tipos de MATLAB ---
+        # Conversión de arrays
         soC_0_m = matlab.double(soC_0.tolist())
         v_tank_0_m = matlab.double(v_tank_0.tolist())
         p_dem_pred_m = matlab.double(p_dem_pred.tolist())
@@ -30,18 +27,24 @@ def llamar_controlador_mpc(mg, soC_0, v_tank_0, v_aq_0,
         p_mgref_hist_0_m = matlab.double(p_mgref_hist_0.tolist())
         q_p_hist_mpc_m = matlab.double(Q_p_hist_mpc.tolist())
 
-        # Llamar a la función de MATLAB con la firma completa y correcta
+        # Llamar a la función de MATLAB
         u_opt_struct = eng.controlador_mpc(
-            mg, soC_0_m, v_tank_0_m, v_aq_0,
-            p_dem_pred_m, p_gen_pred_m, q_dem_pred_m,
+            soC_0_m, 
+            v_tank_0_m, 
+            # --- CAMBIO CLAVE ---
+            # Se convierte explícitamente v_aq_0 a un float nativo de Python
+            float(v_aq_0),
+            p_dem_pred_m, 
+            p_gen_pred_m, 
+            q_dem_pred_m,
             q_p_hist_0_m, 
             p_mgref_hist_0_m,
+            # Se asegura que k_mpc_actual también sea un float nativo
             float(k_mpc_actual), 
             q_p_hist_mpc_m,
             nargout=1
         )
 
-        # Convertir la estructura de MATLAB de salida a un diccionario de Python
         if not u_opt_struct:
             return None
             
@@ -52,6 +55,5 @@ def llamar_controlador_mpc(mg, soC_0, v_tank_0, v_aq_0,
         print(f"Ocurrió un error en el wrapper de MATLAB: {e}")
         return None
     finally:
-        # Asegurarse de que el motor de MATLAB siempre se cierre
         if eng:
             eng.quit()

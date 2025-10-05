@@ -1,5 +1,3 @@
-# --- run_lime_case1_60viviendas.py ---
-
 import numpy as np
 from scipy.io import loadmat
 from lime import lime_tabular
@@ -48,7 +46,7 @@ def funcion_prediccion_mpc(muestras_perturbadas_std):
         if X_original[12] > 1e-6: Q_dem_pred_p[:steps_12h, :] *= (x_perturbed[12] / X_original[12])
         
         u_opt = llamar_controlador_mpc(
-            mg, SoC_p, V_tank_p, V_aq_p,
+            SoC_p, V_tank_p, V_aq_p,
             P_dem_pred_p, P_gen_pred_p, Q_dem_pred_p,
             q_p_hist_0_real, p_mgref_hist_0_real, k_instance_mpc, Q_p_hist_mpc_real
         )
@@ -118,10 +116,10 @@ if __name__ == '__main__':
     Q_p_log, P_grid_log, SoC_log, V_tank_log, V_aq_log = \
         results['Q_p'], results['P_grid'], results['SoC'], results['V_tank'], results['V_aq']
     mg = results['mg']
-    modelos_predictivos = loadmat('models/modelos_prediccion_AR.mat')['modelos']
+    #modelos_predictivos = loadmat('models/modelos_prediccion_AR.mat')['modelos']
     
-    Ts_mpc = mg['Ts_mpc'][0,0][0,0]
-    Ts_sim = mg['Ts_sim'][0,0][0,0]
+    Ts_mpc = float(mg['Ts_mpc'][0,0][0,0])
+    Ts_sim = float(mg['Ts_sim'][0,0][0,0])
     paso_mpc_en_sim = int(Ts_mpc / Ts_sim)
     max_lags = int(mg['max_lags_mpc'][0,0][0,0])
     N = int(mg['N'][0,0][0,0]
@@ -153,7 +151,7 @@ if __name__ == '__main__':
     hist_completo_P_gen = np.vstack([full_data['hist_arranque']['P_gen'][0,0], datos_sim_sub_P_gen])
     hist_completo_Q_dem = np.vstack([full_data['hist_arranque']['Q_dem'][0,0], datos_sim_sub_Q_dem])
     hist_data_real_para_AR = {'P_dem': hist_completo_P_dem[-max_lags:],'P_gen': hist_completo_P_gen[-max_lags:],'Q_dem': hist_completo_Q_dem[-max_lags:]}
-    P_dem_pred_real, P_gen_pred_real, Q_dem_pred_real = llamar_generador_predicciones(modelos_predictivos, hist_data_real_para_AR, N)
+    P_dem_pred_real, P_gen_pred_real, Q_dem_pred_real = llamar_generador_predicciones(hist_data_real_para_AR, N)
     
     Q_p_decisiones_mpc = Q_p_log[0::paso_mpc_en_sim, :]
     Q_p_hist_mpc_real = Q_p_decisiones_mpc[:k_instance_mpc, :]
@@ -184,7 +182,7 @@ if __name__ == '__main__':
     
     # --- EJECUCIÓN DEL ESTUDIO DE OPTIMIZACIÓN ---
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=30, n_jobs=4)
+    study.optimize(objective, n_trials=30, n_jobs=2)
     
     # --- RESULTADOS DE LA OPTIMIZACIÓN ---
     print("\n\n--- OPTIMIZACIÓN DE HIPERPARÁMETROS COMPLETADA ---")

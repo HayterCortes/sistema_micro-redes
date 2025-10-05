@@ -1,7 +1,11 @@
-% generar_predicciones_AR.m
-function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_AR(modelos, hist_data, N)
+% --- generar_predicciones_AR.m (Versión Corregida) ---
+function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_AR(hist_data, N)
     % Genera predicciones a N pasos usando los modelos AR entrenados.
     
+    % --- CAMBIO CLAVE ---
+    % Se cargan los modelos directamente desde el archivo .mat
+    load('models/modelos_prediccion_AR.mat', 'modelos');
+
     num_mg = size(hist_data.P_dem, 2);
     p_dem_pred = zeros(N, num_mg);
     p_gen_pred = zeros(N, num_mg);
@@ -10,7 +14,7 @@ function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_AR(modelos,
     tipos_de_senal = {'P_dem', 'P_gen', 'Q_dem'};
     datos_completos = {hist_data.P_dem, hist_data.P_gen, hist_data.Q_dem};
     predicciones_out = {p_dem_pred, p_gen_pred, q_dem_pred};
-
+    
     for i = 1:num_mg
         for j = 1:length(tipos_de_senal)
             tipo_actual = tipos_de_senal{j};
@@ -21,16 +25,12 @@ function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_AR(modelos,
             theta = modelo_actual.theta;
             num_lags = modelo_actual.num_regresores;
             
-            % Tomar la historia más reciente
             historia_recursiva = historia_actual_completa(end-num_lags+1:end)';
             
             predicciones_temp = zeros(N, 1);
             for step = 1:N
-                % Predecir un paso: y_hat = theta_0 + theta_1*x_n + ...
                 entrada_actual = [1, historia_recursiva];
                 predicciones_temp(step) = entrada_actual * theta;
-                
-                % Actualizar la historia para la siguiente predicción
                 historia_recursiva = [historia_recursiva(2:end), predicciones_temp(step)];
             end
             

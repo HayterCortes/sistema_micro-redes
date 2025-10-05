@@ -1,5 +1,3 @@
-# --- run_lime_case2_cooperacion.py ---
-
 import numpy as np
 from scipy.io import loadmat
 from lime import lime_tabular
@@ -187,7 +185,7 @@ if __name__ == '__main__':
     print('--- Reconstrucción completada. Iniciando optimización de hiperparámetros... ---\n')
     
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=30, n_jobs=4)
+    study.optimize(objective, n_trials=30, n_jobs=2)
     
     print("\n\n--- OPTIMIZACIÓN DE HIPERPARÁMETROS COMPLETADA ---")
     print(f"Mejor valor de Fidelidad (R²): {study.best_value:.4f}")
