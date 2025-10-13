@@ -1,8 +1,7 @@
-% --- generar_predicciones_AR.m (Versión Corregida) ---
+% --- generar_predicciones_AR.m ---
 function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_AR(hist_data, N)
     % Genera predicciones a N pasos usando los modelos AR entrenados.
-    
-    % --- CAMBIO CLAVE ---
+  
     % Se cargan los modelos directamente desde el archivo .mat
     load('models/modelos_prediccion_AR.mat', 'modelos');
 

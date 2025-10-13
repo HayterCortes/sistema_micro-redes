@@ -1,4 +1,4 @@
-% --- controlador_mpc.m ---
+% --- controlador_mpc.m (Versión Corregida) ---
 function [u_opt] = controlador_mpc(soC_0, v_tank_0, v_aq_0, p_dem_pred, p_gen_pred, q_dem_pred, q_p_hist_0, p_mgref_hist_0, k_mpc_actual, Q_p_hist_mpc)
     
     mg = configuracion_sistema();
@@ -113,7 +113,7 @@ function [u_opt] = controlador_mpc(soC_0, v_tank_0, v_aq_0, p_dem_pred, p_gen_pr
     objective = objective + costo_slack_EAW * slack_EAW + costo_slack_s_pozo * sum(sum(slack_s_pozo));
     
     %% --- 4. Resolución ---
-    options = sdpsettings('verbose', 0); 
+    options = sdpsettings('verbose', 0); % Verbose 0 para evitar impresiones en la consola
     sol = optimize(constraints, objective, options);
     
     if sol.problem == 0

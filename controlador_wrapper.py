@@ -1,4 +1,4 @@
-# --- controlador_wrapper.py (Versión Corregida Definitiva) ---
+# --- controlador_wrapper.py ---
 import matlab.engine
 import numpy as np
 import os
@@ -31,8 +31,6 @@ def llamar_controlador_mpc(soC_0, v_tank_0, v_aq_0,
         u_opt_struct = eng.controlador_mpc(
             soC_0_m, 
             v_tank_0_m, 
-            # --- CAMBIO CLAVE ---
-            # Se convierte explícitamente v_aq_0 a un float nativo de Python
             float(v_aq_0),
             p_dem_pred_m, 
             p_gen_pred_m, 

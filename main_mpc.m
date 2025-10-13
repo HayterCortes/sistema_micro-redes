@@ -1,4 +1,4 @@
-% --- main_mpc.m (Versión Final Corregida) ---
+% --- main_mpc.m ---
 clear; clc; close all;
 % Establecer ruta de trabajo
 cd(fileparts(mfilename('fullpath')));
@@ -15,39 +15,17 @@ TRAIN_RATIO = 0.6; % 60% para entrenamiento
 VAL_RATIO   = 0.2; % 20% para validación
 [P_dem_sim, P_gen_sim, Q_dem_sim, ~, ~, ~, P_dem_val, P_gen_val, Q_dem_val, ~, ~, ~] = cargar_y_preparar_datos(7, 30, TRAIN_RATIO, VAL_RATIO);
 
-% --- Parámetros del MPC ---
-% --- ELIMINADO ---
-% Las siguientes líneas se han movido a 'configuracion_sistema.m' para centralizar
-% todos los parámetros y evitar errores.
-% mg(1).Ts_mpc = 30 * 60;
-% mg(1).N      = 48;
-% mg(1).Ts_sim = 60;
-
 % --- Cargar modelos predictivos ---
 load('models/modelos_prediccion_AR.mat');
 fprintf('Modelos predictivos AR cargados.\n');
 mg(1).modelos = modelos;
 
-% --- Parámetros de pozo y acuífero ---
-% --- ELIMINADO --- 
-% Estos parámetros ahora también se cargan desde 'configuracion_sistema.m'
-% mg(1).S_aq = 0.1906;        
-% mg(1).T_aq = 35.1062 / (24*60*60); 
-% mg(1).r_p = 0.2;            
-% mg(1).s_max = 8;            
-% fprintf('Parámetros de acuífero y pozo cargados para el modelo de descenso.\n');
-
-% --- Preparar el historial de arranque desde el set de validación ---
-% --- ELIMINADO ---
-% El parámetro 'max_lags' ahora está en la configuración.
-% max_lags = 48; 
-% mg(1).max_lags_mpc = max_lags;
 fprintf('Preparando historial de arranque con %d pasos del set de validación.\n', mg(1).max_lags_mpc);
 hist_arranque.P_dem = P_dem_val(end - mg(1).max_lags_mpc + 1:end, :);
 hist_arranque.P_gen = P_gen_val(end - mg(1).max_lags_mpc + 1:end, :);
 hist_arranque.Q_dem = Q_dem_val(end - mg(1).max_lags_mpc + 1:end, :);
 
-% --- MANTENIDO: Guardar datos para el explicador de Python ---
+% --- Guardar datos para el explicador de Python ---
 fprintf('--- Exportando perfiles de simulación para Python LIME ---\n');
 if ~exist('utils', 'dir'), mkdir('utils'); end
 save('utils/full_profiles_for_sim.mat', 'P_dem_sim', 'P_gen_sim', 'Q_dem_sim', 'hist_arranque');

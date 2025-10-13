@@ -1,4 +1,4 @@
-% --- configuracion_sistema.m (Versión Corregida) ---
+% --- configuracion_sistema.m ---
 function mg = configuracion_sistema()
     % Esta función configura los parámetros para las 3 micro-redes (mg)
     % y los devuelve en un arreglo de structs.
@@ -9,7 +9,6 @@ function mg = configuracion_sistema()
     S_aq   = 0.1906;          % Coef. de almacenamiento
     T_aq   = 35.1062 / 86400; % Transmisividad [m²/s]
     
-    % --- CORRECCIÓN ---
     r_p    = 0.2;             % Radio del pozo [m] (antes era 'rp')
     
     h_p0   = 2;               % Profundidad inicial del pozo [m]
@@ -48,8 +47,7 @@ function mg = configuracion_sistema()
         mg(i).V_aq_0 = V_aq_0;
         mg(i).S_aq = S_aq; mg(i).T_aq = T_aq;
         
-        % --- CORRECCIÓN ---
-        mg(i).r_p = r_p; % (antes era 'mg(i).rp = rp')
+        mg(i).r_p = r_p; 
         
         mg(i).h_p0 = h_p0;
         mg(i).Rp = Rp;

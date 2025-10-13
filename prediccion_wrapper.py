@@ -1,4 +1,4 @@
-# --- prediccion_wrapper.py (Versión Corregida) ---
+# --- prediccion_wrapper.py ---
 import matlab.engine
 import numpy as np
 import os
@@ -6,7 +6,7 @@ import os
 def llamar_generador_predicciones(hist_data, N):
     """
     Wrapper para llamar a la función de MATLAB 'generar_predicciones_AR'.
-    Ya no necesita recibir los modelos, ya que la función de MATLAB los carga.
+    no necesita recibir los modelos, ya que la función de MATLAB los carga.
     """
     eng = None
     try:
@@ -20,7 +20,6 @@ def llamar_generador_predicciones(hist_data, N):
             'Q_dem': matlab.double(hist_data['Q_dem'].tolist())
         }
         
-        # --- CAMBIO CLAVE ---
         # Se llama a la función sin el argumento 'modelos'
         p_dem_pred_m, p_gen_pred_m, q_dem_pred_m = eng.generar_predicciones_AR(
             hist_data_m,
