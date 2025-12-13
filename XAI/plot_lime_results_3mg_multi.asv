@@ -1,0 +1,266 @@
+%% --- File: plot_lime_results_3mg_multi.m ---
+%
+% MASTER VISUALIZATION SCRIPT FOR LIME RESULTS (Water Exchange Qt)
+%
+% Updates:
+% 1. Fixed missing Y-axis labels (Adjusted figure height/margins).
+% 2. Cleaned Titles (Removed "Target", "Actual", "(Altruism)").
+% 3. Time Format changed to HH:MM.
+% 4. Thesis Notation & m^3 Units preserved.
+%
+%--------------------------------------------------------------------------
+clear; clc; close all;
+
+% --- CONFIGURATION ---
+scenarios_list = {'GlobalPeak', 'Altruismo', 'DirectSatisfaction'};
+targets_list = [1, 2, 3];
+
+% Simulation Parameters
+Ts_sim = 60;   
+Ts_mpc = 1800; 
+
+% Output Directories
+dir_paper = 'figures_paper';
+dir_pres  = 'figures_presentation';
+if ~exist(dir_paper, 'dir'), mkdir(dir_paper); end
+if ~exist(dir_pres, 'dir'), mkdir(dir_pres); end
+
+fprintf('--- GENERATING LIME PLOTS (Clean Titles & HH:MM) ---\n');
+
+for s_idx = 1:length(scenarios_list)
+    scn_name = scenarios_list{s_idx};
+    
+    % Define Clean Title Translation for Plot
+    switch scn_name
+        case 'GlobalPeak'
+            scn_title = 'Scenario A: Global Peak Interaction';
+            is_import = false; 
+        case 'Altruismo'
+            scn_title = 'Scenario B: Active Water Export'; % Removed (Altruism)
+            is_import = false; 
+        case 'DirectSatisfaction'
+            scn_title = 'Scenario C: Direct Demand Satisfaction';
+            is_import = true; 
+        otherwise
+            scn_title = scn_name;
+            is_import = false;
+    end
+    
+    for t_idx = targets_list
+        % Load Result File
+        filename = sprintf('lime_Scenario_%s_MG%d.mat', scn_name, t_idx);
+        
+        if ~exist(filename, 'file')
+            continue; 
+        end
+        
+        fprintf('  > Processing: %s...\n', filename);
+        data = load(filename);
+        
+        % --- 1. DATA PREPARATION ---
+        all_explanations = data.all_explanations;
+        feature_names = data.feature_names;
+        X_values = data.estado.X_original; 
+        K_TARGET = data.K_TARGET;
+        
+        % Calculate Time (Day 1-based and HH:MM)
+        t_seconds = (K_TARGET - 1) * Ts_sim;
+        day_num = floor(t_seconds / 86400) + 1;
+        rem_seconds = mod(t_seconds, 86400);
+        hour_val = floor(rem_seconds / 3600);
+        min_val = round((rem_seconds - hour_val*3600) / 60);
+        
+        % Get Real Output Value (Y)
+        real_Qt = data.estado.Y_target_real_vector(t_idx);
+        
+        % Process Weights
+        num_runs = length(all_explanations);
+        N_features = length(feature_names);
+        weights_matrix = zeros(N_features, num_runs);
+        
+        for i = 1:num_runs
+            run_data = all_explanations{i};
+            map_temp = containers.Map(run_data(:,1), [run_data{:,2}]);
+            for j = 1:N_features
+                weights_matrix(j, i) = map_temp(feature_names{j});
+            end
+        end
+        
+        avg_weights = mean(weights_matrix, 2);
+        std_weights = std(weights_matrix, 0, 2);
+        
+        % --- 2. GENERATE LABELS WITH VALUES AND LATEX ---
+        plot_labels = cell(N_features, 1);
+        
+        for i = 1:N_features
+            raw_name = feature_names{i};
+            val = X_values(i); 
+            
+            % Detect Agent
+            if contains(raw_name, 'MG1_'), g=1;
+            elseif contains(raw_name, 'MG2_'), g=2;
+            elseif contains(raw_name, 'MG3_'), g=3;
+            else, g=4; % Shared/Aquifer
+            end
+            
+            % Detect Variable, Convert Units and Format
+            clean_var = replace(raw_name, {['MG' num2str(g) '_'], 'Pronóstico ', 'Volumen '}, '');
+            
+            if contains(clean_var, 'SoC')
+                sym = 'SoC'; 
+                val_str = sprintf('%.2f%%', val*100);
+                
+            elseif contains(clean_var, 'V_tank')
+                sym = 'V_{Tank}'; 
+                val_m3 = val / 1000; % Convert L to m^3
+                val_str = sprintf('%.1f m^3', val_m3);
+                
+            elseif contains(clean_var, 'P_dem')
+                sym = 'P_{L}';    
+                val_str = sprintf('%.1f kW', val);
+                
+            elseif contains(clean_var, 'P_gen')
+                sym = 'P_{G}';    
+                val_str = sprintf('%.1f kW', val);
+                
+            elseif contains(clean_var, 'Q_dem')
+                sym = 'Q_{L}';    
+                val_str = sprintf('%.2f L/s', val);
+                
+            elseif contains(clean_var, 'V_aq')
+                sym = 'EAW';      
+                val_m3 = val / 1000; % Convert L to m^3
+                val_str = sprintf('%.2e m^3', val_m3);
+                g_str = ''; 
+                
+            else
+                sym = clean_var;
+                val_str = sprintf('%.2f', val);
+            end
+            
+            % Construct Label with Superscript i (e.g. V^1)
+            if g < 4
+                label_str = sprintf('$%s^{%d}$ (%s)', sym, g, val_str);
+            else
+                label_str = sprintf('$%s$ (%s)', sym, val_str);
+            end
+            plot_labels{i} = label_str;
+        end
+        
+        % --- 3. SORTING ---
+        [sorted_w, sort_idx] = sort(abs(avg_weights), 'descend');
+        sorted_labels = plot_labels(sort_idx);
+        sorted_real_w = avg_weights(sort_idx);
+        sorted_std = std_weights(sort_idx);
+        
+        % --- 4. PLOTTING FUNCTION CALLS ---
+        
+        % A. GENERATE PAPER PDF
+        fname_paper = fullfile(dir_paper, sprintf('LIME_%s_MG%d_Paper', scn_name, t_idx));
+        create_lime_figure(sorted_real_w, sorted_std, sorted_labels, ...
+                           scn_title, day_num, hour_val, min_val, real_Qt, t_idx, ...
+                           is_import, 'paper', fname_paper);
+                       
+        % B. GENERATE PRESENTATION PDF
+        fname_pres = fullfile(dir_pres, sprintf('LIME_%s_MG%d_Slide', scn_name, t_idx));
+        create_lime_figure(sorted_real_w, sorted_std, sorted_labels, ...
+                           scn_title, day_num, hour_val, min_val, real_Qt, t_idx, ...
+                           is_import, 'presentation', fname_pres);
+    end
+end
+fprintf('--- ALL PLOTS EXPORTED SUCCESSFULLY ---\n');
+
+
+%% --- LOCAL FUNCTION: PLOTTING ENGINE ---
+function create_lime_figure(weights, errors, labels, title_text, day, hour, minute, qt_val, mg_idx, is_import, mode, filename)
+    
+    % --- STYLING CONFIGURATION ---
+    N = length(weights);
+    
+    if strcmp(mode, 'paper')
+        % IEEE Conference dimensions
+        % Increased height to 6.5 inches to ensure all 16 labels fit
+        fig_width = 8; 
+        fig_height = 6.5; 
+        font_size_ax = 11;
+        font_size_tit = 12;
+        bar_width = 0.6;
+        % Margins [left bottom width height]
+        % Left margin 0.28 gives space for long latex labels
+        pos_vec = [0.42 0.12 0.55 0.68]; 
+    else
+        % Presentation (16:9)
+        fig_width = 14; 
+        fig_height = 8; 
+        font_size_ax = 14;
+        font_size_tit = 18;
+        bar_width = 0.7;
+        pos_vec = [0. 0.12 0.70 0.78];
+    end
+    
+    % Create Invisible Figure for Export
+    fig = figure('Units', 'inches', 'Position', [0, 0, fig_width, fig_height], ...
+                 'Visible', 'off', 'Color', 'w');
+    
+    % Color Logic (Green=Positive, Red=Negative)
+    bar_colors = zeros(N, 3);
+    for k = 1:N
+        if weights(k) >= 0
+            bar_colors(k,:) = [0.4660 0.6740 0.1880]; % Green
+        else
+            bar_colors(k,:) = [0.6350 0.0780 0.1840]; % Red
+        end
+    end
+    
+    % Draw Bars
+    b = barh(weights, bar_width, 'FaceColor', 'flat');
+    b.CData = bar_colors;
+    hold on;
+    
+    % Draw Error Bars
+    errorbar(weights, 1:N, errors, 'horizontal', ...
+             'LineStyle', 'none', 'Color', 'k', 'LineWidth', 1.0);
+    
+    % Axis Formatting
+    ax = gca;
+    % Explicitly set YTick to ensure all N labels appear
+    set(ax, 'YTick', 1:N, 'YTickLabel', labels, 'YDir', 'reverse', ...
+        'TickLabelInterpreter', 'latex', 'FontName', 'Times New Roman', ...
+        'FontSize', font_size_ax);
+    
+    % Set limits to avoid cutting error bars
+    xlim_val = max(abs(weights) + errors) * 1.15;
+    if xlim_val < 1e-6, xlim_val=1; end
+    xlim([-xlim_val, xlim_val]);
+    
+    % Zero Line
+    xline(0, 'k-', 'LineWidth', 1.2);
+    grid on;
+    
+    % Labels
+    xlabel('Average Influence', 'FontName', 'Times New Roman', ...
+           'FontSize', font_size_ax, 'FontWeight', 'bold');
+       
+    % Dynamic Title Construction (Cleaned)
+    if is_import
+        flow_desc = 'Import';
+    else
+        flow_desc = 'Export';
+    end
+    
+    % Format: "MG1 | Day 2, 08:30 | Q_t^1 = -1.500 L/s (Import)"
+    full_title = {title_text; ...
+                  sprintf('MG%d | Day %d, %02d:%02d | $Q_{t}^{%d} = %.3f$ L/s (%s)', ...
+                  mg_idx, day, hour, minute, mg_idx, qt_val, flow_desc)};
+              
+    title(full_title, 'FontName', 'Times New Roman', ...
+          'FontSize', font_size_tit, 'Interpreter', 'latex');
+    
+    % Apply Manual Layout
+    ax.Position = pos_vec;
+    
+    % EXPORT TO PDF
+    exportgraphics(fig, [filename '.pdf'], 'ContentType', 'vector');
+    
+    close(fig);
+end
