@@ -8,9 +8,9 @@
 close all; clear; clc;
 
 % --- CONFIGURACIÓN DEL EXPERIMENTO ---
-TARGETS = [1, 2, 3];    % Analizar las 3 MGs
-INTERVALO_HORAS = 4;    % Resolución temporal (ej. cada 4 horas)
-NUM_RUNS_PER_POINT = 20; % Ejecuciones por punto para suavizar ruido
+TARGETS = [2, 3];    % Analizar las 3 MGs
+INTERVALO_HORAS = 2;    % Resolución temporal (ej. cada 4 horas)
+NUM_RUNS_PER_POINT = 1; % Ejecuciones por punto para suavizar ruido
 
 fprintf('--- LIME TEMPORAL COMPLETO (Intervalo: %dh) ---\n', INTERVALO_HORAS);
 
