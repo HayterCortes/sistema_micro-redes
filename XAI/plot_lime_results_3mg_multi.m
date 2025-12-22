@@ -6,6 +6,9 @@
 % 1. RANKING PLOT: Detailed feature influence (Thesis Notation).
 % 2. INTERACTION PLOT: Aggregated influence by Agent (MG1, MG2, MG3, Aquifer).
 %
+% UPDATES:
+% - Auto-detection of Import/Export flow direction for title accuracy.
+%
 % Output: High-quality PDFs for IEEE Papers and Presentations.
 %
 %--------------------------------------------------------------------------
@@ -38,18 +41,10 @@ for s_idx = 1:length(scenarios_list)
     
     % Define Clean Title
     switch scn_name
-        case 'GlobalPeak'
-            scn_title = 'Scenario A: Global Peak Interaction';
-            is_import = false; 
-        case 'Altruismo'
-            scn_title = 'Scenario B: Active Water Export'; 
-            is_import = false; 
-        case 'DirectSatisfaction'
-            scn_title = 'Scenario C: Direct Demand Satisfaction';
-            is_import = true; 
-        otherwise
-            scn_title = scn_name;
-            is_import = false;
+        case 'GlobalPeak', scn_title = 'Scenario A: Global Peak Interaction';
+        case 'Altruismo', scn_title = 'Scenario B: Active Water Export'; 
+        case 'DirectSatisfaction', scn_title = 'Scenario C: Direct Demand Satisfaction';
+        otherwise, scn_title = scn_name;
     end
     
     for t_idx = targets_list
@@ -115,13 +110,13 @@ for s_idx = 1:length(scenarios_list)
                 sym = 'SoC'; val_str = sprintf('%.2f\\%%', val*100); 
             elseif contains(raw_name, 'tank', 'IgnoreCase', true) || contains(raw_name, 'Estanque', 'IgnoreCase', true)
                 sym = 'V_{Tank}'; val_str = sprintf('%.0f L', val); 
-            elseif contains(raw_name, 'P_dem', 'IgnoreCase', true) || contains(raw_name, 'Demanda Elect', 'IgnoreCase', true)
+            elseif contains(raw_name, 'P_dem', 'IgnoreCase', true)
                 sym = '\hat{P}_{L}'; val_str = sprintf('%.1f kW', val);
-            elseif contains(raw_name, 'P_gen', 'IgnoreCase', true) || contains(raw_name, 'Generacion', 'IgnoreCase', true)
+            elseif contains(raw_name, 'P_gen', 'IgnoreCase', true)
                 sym = '\hat{P}_{G}'; val_str = sprintf('%.1f kW', val);
-            elseif contains(raw_name, 'Q_dem', 'IgnoreCase', true) || contains(raw_name, 'Demanda Hidrica', 'IgnoreCase', true)
+            elseif contains(raw_name, 'Q_dem', 'IgnoreCase', true)
                 sym = '\hat{Q}_{L}'; val_str = sprintf('%.2f L/s', val);
-            elseif contains(raw_name, 'aq', 'IgnoreCase', true) || contains(raw_name, 'Acuifero', 'IgnoreCase', true)
+            elseif contains(raw_name, 'aq', 'IgnoreCase', true)
                 sym = 'EAW'; val_str = sprintf('%.0f L', val); g = 4; groups_vec(i)=4;
             else
                 clean = regexprep(raw_name, 'MG\d_', '');
@@ -155,21 +150,21 @@ for s_idx = 1:length(scenarios_list)
         
         % A. RANKING PLOT (Paper & Pres)
         create_ranking_plot(sorted_real_w, sorted_std, sorted_labels, ...
-                            scn_title, day_num, hour_val, min_val, real_Qt, t_idx, is_import, ...
+                            scn_title, day_num, hour_val, min_val, real_Qt, t_idx, ...
                             'paper', fullfile(dir_paper, sprintf('Ranking_%s_MG%d_Paper', scn_name, t_idx)));
                             
         create_ranking_plot(sorted_real_w, sorted_std, sorted_labels, ...
-                            scn_title, day_num, hour_val, min_val, real_Qt, t_idx, is_import, ...
+                            scn_title, day_num, hour_val, min_val, real_Qt, t_idx, ...
                             'presentation', fullfile(dir_pres, sprintf('Ranking_%s_MG%d_Slide', scn_name, t_idx)));
         
         % B. INTERACTION PLOT (Paper & Pres)
         agent_colors = [color_mg1; color_mg2; color_mg3; color_aq];
         create_interaction_plot(influence_pct, agent_colors, ...
-                                scn_title, day_num, hour_val, min_val, real_Qt, t_idx, is_import, ...
+                                scn_title, day_num, hour_val, min_val, real_Qt, t_idx, ...
                                 'paper', fullfile(dir_paper, sprintf('Interaction_%s_MG%d_Paper', scn_name, t_idx)));
                                 
         create_interaction_plot(influence_pct, agent_colors, ...
-                                scn_title, day_num, hour_val, min_val, real_Qt, t_idx, is_import, ...
+                                scn_title, day_num, hour_val, min_val, real_Qt, t_idx, ...
                                 'presentation', fullfile(dir_pres, sprintf('Interaction_%s_MG%d_Slide', scn_name, t_idx)));
     end
 end
@@ -177,7 +172,7 @@ fprintf('--- ALL PLOTS (RANKING & INTERACTION) EXPORTED SUCCESSFULLY ---\n');
 
 
 %% --- PLOTTING FUNCTION 1: RANKING ---
-function create_ranking_plot(weights, errors, labels, title_text, day, hour, minute, qt_val, mg_idx, is_import, mode, filename)
+function create_ranking_plot(weights, errors, labels, title_text, day, hour, minute, qt_val, mg_idx, mode, filename)
     N = length(weights);
     if strcmp(mode, 'paper')
         fig_width = 7; fig_height = 6; font_ax = 10; font_tit = 11; bar_w = 0.6;
@@ -205,7 +200,14 @@ function create_ranking_plot(weights, errors, labels, title_text, day, hour, min
     xline(0, 'k-', 'LineWidth', 1.2); grid on;
     xlabel('Average Influence', 'FontName', 'Times New Roman', 'FontSize', font_ax, 'FontWeight', 'bold');
        
-    if is_import, flow_desc = 'Import'; else, flow_desc = 'Export'; end
+    % --- LOGIC FOR FLOW DIRECTION ---
+    if qt_val > 0
+        flow_desc = 'Export';
+    else
+        flow_desc = 'Import';
+    end
+    % -------------------------------
+    
     full_title = {title_text; sprintf('MG%d | Day %d, %02d:%02d | $Q_{t}^{%d} = %.3f$ L/s (%s)', mg_idx, day, hour, minute, mg_idx, qt_val, flow_desc)};
     title(full_title, 'FontName', 'Times New Roman', 'FontSize', font_tit, 'Interpreter', 'latex');
     ax.Position = pos_vec;
@@ -215,10 +217,10 @@ end
 
 
 %% --- PLOTTING FUNCTION 2: INTERACTION ---
-function create_interaction_plot(pct_values, colors, title_text, day, hour, minute, qt_val, mg_idx, is_import, mode, filename)
+function create_interaction_plot(pct_values, colors, title_text, day, hour, minute, qt_val, mg_idx, mode, filename)
     
     if strcmp(mode, 'paper')
-        fig_width = 6; fig_height = 4; font_ax = 10; font_tit = 11;
+        fig_width = 6; fig_height = 4.5; font_ax = 10; font_tit = 11;
     else
         fig_width = 12; fig_height = 7; font_ax = 14; font_tit = 16;
     end
@@ -236,14 +238,20 @@ function create_interaction_plot(pct_values, colors, title_text, day, hour, minu
     set(ax, 'FontName', 'Times New Roman', 'FontSize', font_ax);
     grid on; ylim([0 100]);
     
-    % Add percentage text on top of bars
     for i=1:4
         text(i, pct_values(i)+3, sprintf('%.1f%%', pct_values(i)), ...
             'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', ...
             'FontSize', font_ax, 'FontWeight', 'bold');
     end
     
-    if is_import, flow_desc = 'Import'; else, flow_desc = 'Export'; end
+    % --- LOGIC FOR FLOW DIRECTION ---
+    if qt_val > 0
+        flow_desc = 'Export';
+    else
+        flow_desc = 'Import';
+    end
+    % -------------------------------
+    
     full_title = {['Interaction Analysis: ' title_text]; ...
                   sprintf('Target: MG%d | Day %d, %02d:%02d | $Q_{t}^{%d} = %.3f$ L/s (%s)', ...
                   mg_idx, day, hour, minute, mg_idx, qt_val, flow_desc)};
