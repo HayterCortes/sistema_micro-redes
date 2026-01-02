@@ -1,8 +1,8 @@
 %% --- File: plot_lime_final_2lines_FIXED.m ---
 %
-% VISUALIZATION SCRIPT FOR PAPER - FIXED LATEX SYNTAX
+% VISUALIZATION SCRIPT FOR PAPER - ROBUST FIELD DETECTION
 % Logic: Top features until |w_k| > sum(abs(remaining weights)).
-% Titles: Corrected 2-line format (fixed $ delimiters).
+% Target: Scenarios A, B (Qs & Qp for MG1), and C.
 %--------------------------------------------------------------------------
 clear; clc; close all;
 
@@ -10,12 +10,10 @@ clear; clc; close all;
 selected_cases = {
     'GlobalPeak',         1, 'Qs'; ... % Scenario A
     'GlobalPeak',         2, 'Qs'; ... % Scenario A
-    'Altruismo',          1, 'Qs'; ... % Scenario B
+    'Altruismo',          1, 'Qs'; ... % Scenario B - Intercambio
+    'Altruismo',          1, 'Qp'; ... % Scenario B - Bombeo
     'DirectSatisfaction', 2, 'Qs'; ... % Scenario C
-    'DirectSatisfaction', 3, 'Qs'; ... % Scenario C
-    'EnergyEfficiency',   1, 'Qp'; ... % Scenario D
-    'EnergyEfficiency',   2, 'Qp'; ... % Scenario D
-    'EnergyEfficiency',   3, 'Qp'      % Scenario D
+    'DirectSatisfaction', 3, 'Qs'      % Scenario C
 };
 
 % Colores de Agentes
@@ -28,7 +26,7 @@ color_others = [0.7 0.7 0.7];
 dir_paper = 'figures_paper_final';
 if ~exist(dir_paper, 'dir'), mkdir(dir_paper); end
 
-fprintf('--- GENERANDO GRÁFICOS LIME (SINTAXIS LATEX CORREGIDA) ---\n');
+fprintf('--- GENERANDO GRÁFICOS LIME (SINTAXIS CORREGIDA Y ROBUSTA) ---\n');
 
 for i = 1:size(selected_cases, 1)
     scn_raw  = selected_cases{i, 1};
@@ -38,31 +36,40 @@ for i = 1:size(selected_cases, 1)
     if strcmp(var_type, 'Qs')
         filename = sprintf('lime_Scenario_%s_MG%d_MEAN.mat', scn_raw, t_idx);
         prefix_save = 'Qs_';
-        switch scn_raw
-            case 'GlobalPeak', s_title = 'Scenario A: Global Peak Interaction';
-            case 'Altruismo', s_title = 'Scenario B: Active Water Export';
-            case 'DirectSatisfaction', s_title = 'Scenario C: Direct Demand Satisfaction';
-        end
         sym_tex = 'Q_{s}';
     else
         filename = sprintf('lime_PUMP_%s_MG%d_MEAN.mat', scn_raw, t_idx);
         prefix_save = 'Qp_';
-        s_title = 'Scenario D: Coordinated Pumping';
         sym_tex = 'Q_{p}';
+    end
+
+    switch scn_raw
+        case 'GlobalPeak', s_title = 'Scenario A: Global Peak Interaction';
+        case 'Altruismo',  s_title = 'Scenario B: Active Water Export';
+        case 'DirectSatisfaction', s_title = 'Scenario C: Direct Demand Satisfaction';
     end
 
     if ~exist(filename, 'file'), continue; end
     data = load(filename);
     
+    % --- CORRECCIÓN ROBUSTA DE CAMPO K_TARGET ---
+    if isfield(data, 'K_TARGET')
+        k_actual = data.K_TARGET;
+    elseif isfield(data, 'k_target')
+        k_actual = data.k_target;
+    else
+        k_actual = 1; % Fallback
+    end
+    
     % --- TIEMPO ---
     Ts_sim = 60; 
-    t_seconds = (data.K_TARGET - 1) * Ts_sim;
+    t_seconds = (k_actual - 1) * Ts_sim;
     day_num = floor(t_seconds / 86400) + 1;
     rem_seconds = mod(t_seconds, 86400);
     hour_val = floor(rem_seconds / 3600);
     min_val = round((rem_seconds - hour_val*3600) / 60);
     
-    % --- PESOS ---
+    % --- PROCESAMIENTO DE PESOS ---
     feature_names = data.feature_names;
     X_values = data.estado.X_original;
     num_runs = length(data.all_explanations);
@@ -89,7 +96,7 @@ for i = 1:size(selected_cases, 1)
     final_weights = avg_weights(top_orig_idx);
     final_std = std_weights(top_orig_idx);
     
-    % Otros
+    % Barra de Otros
     others_orig_idx = abs_sort_idx(cutoff_idx+1:end);
     if ~isempty(others_orig_idx)
         final_weights = [final_weights; sum(avg_weights(others_orig_idx))];
@@ -113,17 +120,17 @@ for i = 1:size(selected_cases, 1)
     end
     if any(is_others), final_labels{end} = 'Others (Sum)'; end
     
-    % Interacción
+    % Influencia por Agente
     influence_per_agent = zeros(1, 4);
     for g = 1:4, influence_per_agent(g) = sum(abs(avg_weights(groups_vec == g))); end
     influence_pct = (influence_per_agent / sum(influence_per_agent)) * 100;
     
-    % Dirección
+    % Dirección del flujo
     real_val = data.estado.Y_target_real_vector(t_idx);
     if strcmp(var_type, 'Qs')
         if real_val > 0, flow_str = 'Exporting'; else, flow_str = 'Importing'; end
     else
-        if real_val > 0, flow_str = 'Extracting'; else, flow_str = 'Idle'; end
+        if real_val > 0.01, flow_str = 'Extracting'; else, flow_str = 'Idle'; end
     end
     
     % --- PLOT ---
@@ -138,7 +145,7 @@ end
 
 fprintf('--- PROCESO FINALIZADO SIN ERRORES ---\n');
 
-%% --- FUNCIONES CORREGIDAS ---
+%% --- FUNCIONES AUXILIARES ---
 
 function label = get_mean_latex_label(raw_name, val, g_owner)
     is_mean = contains(raw_name, 'Mean_', 'IgnoreCase', true);
@@ -171,7 +178,6 @@ function create_ranking_plot_2lines_FIXED(weights, errors, labels, is_others, ti
         'TickLabelInterpreter','latex', 'FontName','Times New Roman', 'FontSize',10);
     xlabel('Average Influence (LIME Weight)', 'FontName','Times New Roman', 'FontSize',10, 'FontWeight','bold');
     
-    % CORRECCIÓN DE SINTAXIS AQUÍ: Se eliminó el $ extra después de L/s
     line1 = title_text;
     line2 = sprintf('Target: MG%d | Day %d, %02d:%02d | $%s^{%d} = %.2f$ L/s (%s)', ...
                     mg, d, h, m, sym_tex, mg, val, flow_str);
