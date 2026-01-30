@@ -1,19 +1,32 @@
 %% --- Archivo: reconstruct_state_matlab_3mg.m ---
 %
 % Reconstruye el estado COMPLETO del sistema de 3 Micro-redes.
-% Crea un vector de características aplanado (X_original) de dimensión 16:
-% [MG1_Feats (5), MG2_Feats (5), MG3_Feats (5), V_aq (1)]
+% ** VERSIÓN FLEXIBLE (AR / TS) **
 %
-% ** ACTUALIZACIÓN: Guarda los valores reales de Q_t para las 3 MGs.
+% Entradas:
+%   K_GLOBAL_TARGET: Instante de tiempo a reconstruir.
+%   TIPO_MODELO: 'AR' o 'TS' (String).
 %--------------------------------------------------------------------------
-function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET)
+function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET, TIPO_MODELO)
+
+    if nargin < 2
+        TIPO_MODELO = 'AR'; % Valor por defecto si no se especifica
+        warning('No se especificó TIPO_MODELO. Usando AR por defecto.');
+    end
 
     % --- 1. Cargar Datos y Resultados ---
+    % Nota: Lo ideal es cargar el archivo de resultados correspondiente al modelo
+    % usado. Aquí intentamos cargar el dinámico o fallamos al genérico.
     try
-        results = load('results_mpc/resultados_mpc_3mg_7dias.mat');
+        nombre_res = sprintf('results_mpc/resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
+        if isfile(nombre_res)
+            results = load(nombre_res);
+        else
+            results = load('results_mpc/resultados_mpc_3mg_7dias.mat');
+        end
         mg = results.mg; 
     catch
-        error('No se encontró "results_mpc/resultados_mpc_3mg_7dias.mat". Ejecute main_mpc.m primero.');
+        error('No se encontraron archivos de resultados en results_mpc/.');
     end
     
     try
@@ -23,10 +36,25 @@ function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET)
         error('Error cargando utils/full_profiles_for_sim.mat');
     end
     
-    try
-        load('models/modelos_prediccion_AR.mat');
-    catch
-        error('Error cargando modelos AR.');
+    % --- SELECCIÓN DE MODELO PREDICTIVO ---
+    if strcmp(TIPO_MODELO, 'TS')
+        try
+            % Cargar estructura necesaria para TS (si aplica) o preparar funciones
+            % Nota: generar_predicciones_TS carga internamente el .mat, 
+            % pero verificamos existencia aquí.
+            if ~isfile('models/modelos_prediccion_TS.mat')
+                error('Falta models/modelos_prediccion_TS.mat');
+            end
+        catch me
+            error('Error preparando modelos TS: %s', me.message);
+        end
+    else
+        try
+            % Para AR, a veces se cargan explícitamente variables globales
+            load('models/modelos_prediccion_AR.mat'); 
+        catch
+            error('Error cargando modelos AR.');
+        end
     end
 
     % --- 2. Parámetros de Tiempo ---
@@ -48,7 +76,7 @@ function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET)
     X_original = [];
     feature_names = {};
     
-    % Recuperar pronósticos
+    % Recuperar pronósticos históricos (Simulación perfecta de lo que vio el MPC)
     datos_sim_sub.P_dem = submuestreo_max(profiles.P_dem_sim(1:k_global_idx, :), paso_mpc_en_sim);
     datos_sim_sub.P_gen = submuestreo_max(profiles.P_gen_sim(1:k_global_idx, :), paso_mpc_en_sim);
     datos_sim_sub.Q_dem = submuestreo_max(profiles.Q_dem_sim(1:k_global_idx, :), paso_mpc_en_sim);
@@ -61,15 +89,20 @@ function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET)
     hist_data.P_gen = hist_completo.P_gen(end - mg(1).max_lags_mpc + 1:end, :);
     hist_data.Q_dem = hist_completo.Q_dem(end - mg(1).max_lags_mpc + 1:end, :);
 
-    [P_dem_pred_real, P_gen_pred_real, Q_dem_pred_real] = generar_predicciones_AR(hist_data, N_horizon);
+    % --- GENERACIÓN DE PREDICCIONES (SWAP) ---
+    if strcmp(TIPO_MODELO, 'TS')
+        [P_dem_pred_real, P_gen_pred_real, Q_dem_pred_real] = generar_predicciones_TS(hist_data, N_horizon);
+    else
+        [P_dem_pred_real, P_gen_pred_real, Q_dem_pred_real] = generar_predicciones_AR(hist_data, N_horizon);
+    end
 
     % --- Construcción del Vector Plano por Agente ---
     for i = 1:num_mg
-        % Estados físicos actuales
+        % Estados físicos actuales (del resultado de simulación cargado)
         soc_val = results.SoC(k_global_idx, i);
         vtank_val = results.V_tank(k_global_idx, i);
         
-        % Features de pronóstico (k=1)
+        % Features de pronóstico (k=1, el paso inmediato siguiente)
         p_dem_k1 = P_dem_pred_real(1, i);
         p_gen_k1 = P_gen_pred_real(1, i);
         q_dem_k1 = Q_dem_pred_real(1, i);
@@ -126,7 +159,6 @@ function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET)
     estado.constants.k_mpc_actual = k_mpc_idx;
     estado.constants.Q_p_hist_mpc = Q_p_hist_mpc_real;
     
-    % ** ACTUALIZACIÓN: Guardar vector real de intercambio para las 3 MGs **
     estado.Y_target_real_vector = results.Q_t(k_global_idx, :); 
 
     params.mg = mg;

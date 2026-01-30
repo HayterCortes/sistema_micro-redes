@@ -5,17 +5,27 @@
 close all; clear; clc;
 
 % --- CONFIGURACIÓN ---
-NUM_RUNS = 1; 
-fprintf('--- LIME BOMBEO (Q_p): ALTRUISMO CON CONTROLADOR ROBUSTO ---\n');
+TIPO_MODELO = 'AR'; % <--- CAMBIA ESTO A 'AR' O 'TS'
+NUM_RUNS = 1;
+fprintf('--- LIME BOMBEO (Q_p): ALTRUISMO (Modelo: %s) ---\n', TIPO_MODELO);
 
 %% 1. CARGA DE DATOS
 try
-    results = load('results_mpc/resultados_mpc_3mg_7dias.mat');
+    % Construcción dinámica del nombre del archivo
+    nombre_archivo = sprintf('results_mpc/resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
+    
+    if isfile(nombre_archivo)
+        results = load(nombre_archivo);
+    else
+        warning('No se halló %s. Intentando archivo genérico...', nombre_archivo);
+        results = load('results_mpc/resultados_mpc_3mg_7dias.mat');
+    end
+    
     profiles = load('utils/full_profiles_for_sim.mat');
     mg = results.mg;
-    fprintf('Datos cargados correctamente.\n');
+    fprintf('Datos cargados correctamente: %s\n', nombre_archivo);
 catch
-    error('Faltan archivos de resultados.');
+    error('Faltan archivos. Ejecute main_mpc.m con el modelo %s.', TIPO_MODELO);
 end
 
 Q_t = results.Q_t; Q_p = results.Q_p; 
@@ -44,7 +54,7 @@ scn_name = 'Altruismo';
 
 %% 3. COMPILACIÓN DEL CONTROLADOR ROBUSTO (Usa Script 2 Logic)
 fprintf('\nCompilando Controlador MPC Robusto (Theis + Full Costs)...\n');
-[~, params_init] = reconstruct_state_matlab_3mg(k_alt_vec(1));
+[~, params_init] = reconstruct_state_matlab_3mg(k_alt_vec(1), TIPO_MODELO);
 controller_obj = get_compiled_mpc_controller_3mg_robust(params_init.mg);
 
 %% 4. BUCLE LIME PARA MG1 (ALTRUISMO Q_p)
@@ -52,7 +62,7 @@ t_idx = 1; % Analizamos la MG1 (La exportadora principal)
 k_target = k_alt_vec(t_idx);
 fprintf('  > Analizando MG%d en K=%d (Día %.2f)... ', t_idx, k_target, k_target*mg(1).Ts_sim/86400);
 
-[estado, params] = reconstruct_state_matlab_3mg(k_target);
+[estado, params] = reconstruct_state_matlab_3mg(k_target, TIPO_MODELO);
 
 % Feature Engineering: MEAN predictions
 P_dem_pred = estado.constants.p_dem_pred_full; 
@@ -72,8 +82,8 @@ end
 estado.Y_target_real_vector = results.Q_p(k_target, :); 
 [~, all_explanations] = evalc('calculate_lime_pumping_3mg(estado, controller_obj, params, NUM_RUNS, t_idx)');
 
-% Guardar con el nombre que espera el script de gráficos
-filename = sprintf('lime_PUMP_%s_MG%d_MEAN.mat', scn_name, t_idx);
+% Guardar incluyendo el TIPO_MODELO en el nombre
+filename = sprintf('lime_PUMP_%s_%s_MG%d_MEAN.mat', scn_name, TIPO_MODELO, t_idx);
 feature_names = estado.feature_names;
 save(filename, 'all_explanations', 'feature_names', 'estado', 'k_target');
 fprintf('[OK]\n');

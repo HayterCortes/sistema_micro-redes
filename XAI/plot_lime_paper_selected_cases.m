@@ -1,4 +1,4 @@
-%% --- File: plot_lime_final_2lines_FIXED.m ---
+%% --- File: plot_lime_selected_cases.m ---
 %
 % VISUALIZATION SCRIPT FOR PAPER - ROBUST FIELD DETECTION
 % Logic: Top features until |w_k| > sum(abs(remaining weights)).

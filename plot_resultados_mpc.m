@@ -1,3 +1,4 @@
+% plot_resultados_mpc.m
 function plot_resultados_mpc(mg, SoC, V_tank, P_grid, Q_p, Q_DNO, P_pump, V_aq, Q_t, h_p)
     
     %% --- 1. Definición de Estilos y Parámetros ---

@@ -1,35 +1,31 @@
-%% --- File: plot_lime_results_3mg_MEAN.m ---
+%% --- File: plot_lime_results_3mg_MEAN_v3.m ---
 %
 % VISUALIZATION SCRIPT FOR LIME (MEAN/AVERAGE VERSION)
-%
-% Generates plots for Q_t (Water Exchange) where input features
-% representing predictions (P_gen, P_dem, Q_dem) are AVERAGES over the horizon.
-%
-% FIXES:
-% - LaTeX Escape for % symbol in SoC (Critical Fix).
-% - Robust case-insensitive name detection.
-% - Agent-based grouping for Interaction Plots.
-%
+% Supports: AR and TS models.
+% FIX v3: Generates BOTH Q_s (Exchange) and Q_p (Pumping) plots 
+%         for MG1 in the Altruismo scenario.
 %--------------------------------------------------------------------------
 clear; clc; close all;
 
 % --- CONFIGURATION ---
+TIPO_MODELO = 'AR'; % <--- CAMBIA ESTO A 'AR' O 'TS'
 scenarios_list = {'GlobalPeak', 'Altruismo', 'DirectSatisfaction'};
 targets_list = [1, 2, 3];
 
-% Colors for Interaction Plot (Agent Colors)
+% Colors for Interaction Plot
 color_mg1 = [0 0.4470 0.7410];      % Blue
 color_mg2 = [0.8500 0.3250 0.0980]; % Orange
 color_mg3 = [0.9290 0.6940 0.1250]; % Yellow
 color_aq  = [0.5 0.5 0.5];          % Gray
 
 % Output Directories
-dir_paper = 'figures_paper_mean';
-dir_pres  = 'figures_presentation_mean';
+dir_paper = sprintf('figures_paper_mean_%s', TIPO_MODELO);
+dir_pres  = sprintf('figures_presentation_mean_%s', TIPO_MODELO);
+
 if ~exist(dir_paper, 'dir'), mkdir(dir_paper); end
 if ~exist(dir_pres, 'dir'), mkdir(dir_pres); end
 
-fprintf('--- GENERATING LIME PLOTS (MEAN FEATURE VERSION - FIXED) ---\n');
+fprintf('--- GENERATING LIME PLOTS (%s MODEL) ---\n', TIPO_MODELO);
 
 for s_idx = 1:length(scenarios_list)
     scn_name = scenarios_list{s_idx};
@@ -43,154 +39,164 @@ for s_idx = 1:length(scenarios_list)
     
     for t_idx = targets_list
         
-        % LOAD _MEAN FILE
-        filename = sprintf('lime_Scenario_%s_MG%d_MEAN.mat', scn_name, t_idx);
-        if ~exist(filename, 'file')
-            fprintf('  [!] File not found: %s\n', filename);
-            continue;
+        % --- 1. CONSTRUCCIÓN DE NOMBRES DE ARCHIVO ---
+        f_scn = sprintf('lime_Scenario_%s_%s_MG%d_MEAN.mat', scn_name, TIPO_MODELO, t_idx);
+        f_pump = sprintf('lime_PUMP_%s_%s_MG%d_MEAN.mat', scn_name, TIPO_MODELO, t_idx);
+        
+        % --- 2. LISTA DE TAREAS (JOB QUEUE) ---
+        % En lugar de elegir uno, creamos una lista de archivos a procesar
+        files_to_process = {};
+        is_pump_flags = [];
+        
+        % A) Siempre intentar procesar el Intercambio (Q_s) si existe
+        if exist(f_scn, 'file')
+            files_to_process{end+1} = f_scn;
+            is_pump_flags(end+1) = false;
         end
         
-        fprintf('  > Processing: %s...\n', filename);
-        data = load(filename);
+        % B) Si es Altruismo MG1, TAMBIÉN procesar el Bombeo (Q_p) si existe
+        if strcmp(scn_name, 'Altruismo') && t_idx == 1 && exist(f_pump, 'file')
+            files_to_process{end+1} = f_pump;
+            is_pump_flags(end+1) = true;
+        end
         
-        all_explanations = data.all_explanations;
-        feature_names = data.feature_names;
-        X_values = data.estado.X_original;
-        K_TARGET = data.K_TARGET;
+        if isempty(files_to_process)
+            continue; 
+        end
         
-        % Time info
-        Ts_sim = 60; 
-        t_seconds = (K_TARGET - 1) * Ts_sim;
-        day_num = floor(t_seconds / 86400) + 1;
-        rem_seconds = mod(t_seconds, 86400);
-        hour_val = floor(rem_seconds / 3600);
-        min_val = round((rem_seconds - hour_val*3600) / 60);
-        
-        real_Qt = data.estado.Y_target_real_vector(t_idx);
-        
-        % Weights processing
-        num_runs = length(all_explanations);
-        N_features = length(feature_names);
-        weights_matrix = zeros(N_features, num_runs);
-        
-        for i = 1:num_runs
-            run_data = all_explanations{i};
-            map_temp = containers.Map(run_data(:,1), [run_data{:,2}]);
-            for j = 1:N_features
-                weights_matrix(j, i) = map_temp(feature_names{j});
+        % --- 3. PROCESAR CADA ARCHIVO EN LA LISTA ---
+        for k = 1:length(files_to_process)
+            filename = files_to_process{k};
+            is_pump_analysis = is_pump_flags(k);
+            
+            fprintf('  > Processing: %s...\n', filename);
+            data = load(filename);
+            
+            all_explanations = data.all_explanations;
+            feature_names = data.feature_names;
+            X_values = data.estado.X_original;
+            
+            % Recuperar K_TARGET
+            if isfield(data, 'K_TARGET'), K_TARGET = data.K_TARGET;
+            elseif isfield(data, 'k_target'), K_TARGET = data.k_target;
+            else, K_TARGET = 1; warning('K_TARGET missing, using 1.'); end
+            
+            % Información de Tiempo
+            Ts_sim = 60; 
+            t_seconds = (K_TARGET - 1) * Ts_sim;
+            day_num = floor(t_seconds / 86400) + 1;
+            rem_seconds = mod(t_seconds, 86400);
+            hour_val = floor(rem_seconds / 3600);
+            min_val = round((rem_seconds - hour_val*3600) / 60);
+            
+            % Obtener Valor Real (Y)
+            if isfield(data.estado, 'Y_target_real_vector')
+                real_val = data.estado.Y_target_real_vector(t_idx);
+            else
+                real_val = 0; 
             end
-        end
-        avg_weights = mean(weights_matrix, 2);
-        std_weights = std(weights_matrix, 0, 2);
-        
-        % --- GENERATE LABELS & GROUPS ---
-        plot_labels = cell(N_features, 1);
-        groups_vec = zeros(N_features, 1); 
-        
-        for i = 1:N_features
-            raw_name = feature_names{i};
-            val = X_values(i);
             
-            % A. Identify Owner (Agent Grouping)
-            g_owner = 4; 
-            if contains(raw_name, 'MG1', 'IgnoreCase', true), g_owner=1;
-            elseif contains(raw_name, 'MG2', 'IgnoreCase', true), g_owner=2;
-            elseif contains(raw_name, 'MG3', 'IgnoreCase', true), g_owner=3;
+            % Procesamiento de Pesos (Promedio)
+            num_runs = length(all_explanations);
+            N_features = length(feature_names);
+            weights_matrix = zeros(N_features, num_runs);
+            
+            for i = 1:num_runs
+                run_data = all_explanations{i};
+                map_temp = containers.Map(run_data(:,1), [run_data{:,2}]);
+                for j = 1:N_features
+                    weights_matrix(j, i) = map_temp(feature_names{j});
+                end
             end
-            if contains(raw_name, 'aq', 'IgnoreCase', true), g_owner = 4; end
+            avg_weights = mean(weights_matrix, 2);
+            std_weights = std(weights_matrix, 0, 2);
             
-            groups_vec(i) = g_owner; 
+            % --- GENERAR ETIQUETAS Y GRUPOS ---
+            plot_labels = cell(N_features, 1);
+            groups_vec = zeros(N_features, 1); 
             
-            % B. Generate Robust Label
-            plot_labels{i} = get_mean_latex_label(raw_name, val, g_owner);
-        end
-        
-        % --- SORTING ---
-        [sorted_w, sort_idx] = sort(abs(avg_weights), 'descend');
-        sorted_labels = plot_labels(sort_idx);
-        sorted_real_w = avg_weights(sort_idx);
-        sorted_std = std_weights(sort_idx);
-        
-        % --- AGGREGATION ---
-        influence_per_agent = zeros(1, 4);
-        for g = 1:4
-            idx_group = (groups_vec == g);
-            influence_per_agent(g) = sum(abs(avg_weights(idx_group)));
-        end
-        total_infl = sum(influence_per_agent);
-        if total_infl < 1e-9, total_infl = 1; end
-        influence_pct = (influence_per_agent / total_infl) * 100;
-        
-        % --- PLOTTING ---
-        
-        % 1. RANKING PLOT
-        fname_rank_pap = fullfile(dir_paper, sprintf('Ranking_%s_MG%d_MEAN_Paper', scn_name, t_idx));
-        create_ranking_plot(sorted_real_w, sorted_std, sorted_labels, s_title, ...
-            day_num, hour_val, min_val, real_Qt, t_idx, 'paper', fname_rank_pap);
+            for i = 1:N_features
+                raw_name = feature_names{i};
+                val = X_values(i);
+                
+                % Identificar Dueño (Agente)
+                g_owner = 4; 
+                if contains(raw_name, 'MG1', 'IgnoreCase', true), g_owner=1;
+                elseif contains(raw_name, 'MG2', 'IgnoreCase', true), g_owner=2;
+                elseif contains(raw_name, 'MG3', 'IgnoreCase', true), g_owner=3;
+                end
+                if contains(raw_name, 'aq', 'IgnoreCase', true), g_owner = 4; end
+                
+                groups_vec(i) = g_owner; 
+                plot_labels{i} = get_mean_latex_label(raw_name, val, g_owner);
+            end
             
-        fname_rank_pres = fullfile(dir_pres, sprintf('Ranking_%s_MG%d_MEAN_Slide', scn_name, t_idx));
-        create_ranking_plot(sorted_real_w, sorted_std, sorted_labels, s_title, ...
-            day_num, hour_val, min_val, real_Qt, t_idx, 'presentation', fname_rank_pres);
+            % Ordenar por importancia
+            [sorted_w, sort_idx] = sort(abs(avg_weights), 'descend');
+            sorted_labels = plot_labels(sort_idx);
+            sorted_real_w = avg_weights(sort_idx);
+            sorted_std = std_weights(sort_idx);
             
-        % 2. INTERACTION PLOT
-        agent_colors = [color_mg1; color_mg2; color_mg3; color_aq];
-        
-        fname_int_pap = fullfile(dir_paper, sprintf('Interaction_%s_MG%d_MEAN_Paper', scn_name, t_idx));
-        create_interaction_plot(influence_pct, agent_colors, s_title, ...
-            day_num, hour_val, min_val, real_Qt, t_idx, 'paper', fname_int_pap);
+            % Agregación por Agente
+            influence_per_agent = zeros(1, 4);
+            for g = 1:4
+                idx_group = (groups_vec == g);
+                influence_per_agent(g) = sum(abs(avg_weights(idx_group)));
+            end
+            total_infl = sum(influence_per_agent);
+            if total_infl < 1e-9, total_infl = 1; end
+            influence_pct = (influence_per_agent / total_infl) * 100;
             
-        fname_int_pres = fullfile(dir_pres, sprintf('Interaction_%s_MG%d_MEAN_Slide', scn_name, t_idx));
-        create_interaction_plot(influence_pct, agent_colors, s_title, ...
-            day_num, hour_val, min_val, real_Qt, t_idx, 'presentation', fname_int_pres);
-            
+            % --- DEFINICIÓN DE TÍTULOS Y SUFIJOS DE ARCHIVO ---
+            if is_pump_analysis
+                target_str = sprintf('$Q_{p}^{%d}$', t_idx);
+                s_title_plot = [s_title ' (Pumping)'];
+                file_suffix = '_PUMP'; % Sufijo para diferenciar el archivo PDF
+            else
+                target_str = sprintf('$Q_{s}^{%d}$', t_idx);
+                s_title_plot = s_title;
+                file_suffix = '';      % Sin sufijo para el estándar (Qs)
+            end
+    
+            % 1. RANKING PLOT
+            fname_rank_pap = fullfile(dir_paper, sprintf('Ranking_%s_%s_MG%d%s_Paper', scn_name, TIPO_MODELO, t_idx, file_suffix));
+            create_ranking_plot(sorted_real_w, sorted_std, sorted_labels, s_title_plot, ...
+                day_num, hour_val, min_val, real_val, t_idx, 'paper', fname_rank_pap, target_str);
+                
+            % 2. INTERACTION PLOT
+            agent_colors = [color_mg1; color_mg2; color_mg3; color_aq];
+            fname_int_pap = fullfile(dir_paper, sprintf('Interaction_%s_%s_MG%d%s_Paper', scn_name, TIPO_MODELO, t_idx, file_suffix));
+            create_interaction_plot(influence_pct, agent_colors, s_title_plot, ...
+                day_num, hour_val, min_val, real_val, t_idx, 'paper', fname_int_pap, target_str);
+        end    
     end
 end
-fprintf('--- ALL MEAN PLOTS EXPORTED SUCCESSFULLY ---\n');
+fprintf('--- ALL MEAN PLOTS EXPORTED SUCCESSFULLY FOR %s ---\n', TIPO_MODELO);
 
 
 %% --- HELPER: LABEL PARSER (ROBUST + LATEX FIX) ---
 function label = get_mean_latex_label(raw_name, val, g_owner)
     is_mean = contains(raw_name, 'Mean_', 'IgnoreCase', true);
-    
-    % Limpiamos el nombre para buscar el núcleo (Core Name)
-    % Quitamos MGx_ y Mean_ para comparar solo la variable
     core_name = regexprep(raw_name, 'MG\d_', '', 'ignorecase');
     core_name = regexprep(core_name, 'Mean_', '', 'ignorecase');
     
-    % Detección Robusta
     if contains(core_name, 'SoC', 'IgnoreCase', true)
-        sym = 'SoC'; 
-        % === CORRECCIÓN CRÍTICA ===
-        % Usamos \\%% para que LaTeX renderice el símbolo %
-        val_fmt = '%.1f\\%%'; 
-        val = val * 100;
-        
+        sym = 'SoC'; val_fmt = '%.1f\\%%'; val = val * 100;
     elseif contains(core_name, 'tank', 'IgnoreCase', true) || contains(core_name, 'Estanque', 'IgnoreCase', true)
         sym = 'V_{Tank}'; val_fmt='%.0f L';
-        
     elseif contains(core_name, 'P_dem', 'IgnoreCase', true)
         sym = 'P_{L}'; val_fmt='%.1f kW';
-        
     elseif contains(core_name, 'P_gen', 'IgnoreCase', true)
         sym = 'P_{G}'; val_fmt='%.1f kW';
-        
     elseif contains(core_name, 'Q_dem', 'IgnoreCase', true)
         sym = 'Q_{L}'; val_fmt='%.2f L/s';
-        
     elseif contains(core_name, 'aq', 'IgnoreCase', true)
         sym = 'EAW'; val_fmt='%.0f L'; g_owner=4;
-        
     else
-        sym = 'X'; val_fmt='%.2f'; % Default
+        sym = 'X'; val_fmt='%.2f'; 
     end
     
-    % Notación Matemática
-    if is_mean
-        final_sym = sprintf('\\bar{%s}', sym);
-    else
-        final_sym = sym; 
-    end
-    
+    if is_mean, final_sym = sprintf('\\bar{%s}', sym); else, final_sym = sym; end
     val_str = sprintf(val_fmt, val);
     
     if g_owner < 4
@@ -202,15 +208,10 @@ end
 
 
 %% --- PLOT 1: RANKING ---
-function create_ranking_plot(weights, errors, labels, title_text, d, h, m, qt, mg, mode, fname)
+function create_ranking_plot(weights, errors, labels, title_text, d, h, m, val, mg, mode, fname, target_sym)
     N = length(weights);
-    if strcmp(mode, 'paper')
-        fig_w=7; fig_h=6; font_ax=10; font_t=11; bar_w=0.6;
-        pos_ax = [0.35 0.12 0.60 0.78];
-    else
-        fig_w=14; fig_h=8; font_ax=14; font_t=16; bar_w=0.7;
-        pos_ax = [0.25 0.12 0.70 0.78];
-    end
+    fig_w=7; fig_h=6; font_ax=10; font_t=11; bar_w=0.6;
+    pos_ax = [0.35 0.12 0.60 0.78];
     
     fig = figure('Units','inches','Position',[0 0 fig_w fig_h],'Visible','off','Color','w');
     
@@ -229,11 +230,9 @@ function create_ranking_plot(weights, errors, labels, title_text, d, h, m, qt, m
     
     xlabel('Average Influence (Mean Features)', 'FontName','Times New Roman', 'FontSize',font_ax, 'FontWeight','bold');
     
-    if qt > 0, flow_str = 'Exporting'; else, flow_str = 'Importing'; end
-    
-    full_title = {['Mean-Feature Analysis: ' title_text]; ...
-                  sprintf('Target: MG%d | Day %d, %02d:%02d | $Q_{t}^{%d}=%.2f$ L/s (%s)', ...
-                  mg, d, h, m, mg, qt, flow_str)};
+    full_title = {['LIME Analysis: ' title_text]; ...
+                  sprintf('Target: MG%d | Day %d, %02d:%02d | %s = %.2f', ...
+                  mg, d, h, m, target_sym, val)};
               
     title(full_title, 'FontName','Times New Roman', 'FontSize',font_t, 'Interpreter','latex');
     
@@ -246,12 +245,8 @@ end
 
 
 %% --- PLOT 2: INTERACTION ---
-function create_interaction_plot(pct, cmap, title_text, d, h, m, qt, mg, mode, fname)
-    if strcmp(mode, 'paper')
-        fig_w=6; fig_h=4.5; font_ax=10; font_t=11;
-    else
-        fig_w=12; fig_h=7; font_ax=14; font_t=16;
-    end
+function create_interaction_plot(pct, cmap, title_text, d, h, m, val, mg, mode, fname, target_sym)
+    fig_w=6; fig_h=4.5; font_ax=10; font_t=11;
     fig = figure('Units','inches','Position',[0 0 fig_w fig_h],'Visible','off','Color','w');
     
     b = bar(1:4, pct, 0.6, 'FaceColor','flat'); b.CData = cmap;
@@ -268,10 +263,8 @@ function create_interaction_plot(pct, cmap, title_text, d, h, m, qt, mg, mode, f
             'FontName','Times New Roman','FontSize',font_ax,'FontWeight','bold');
     end
     
-    if qt > 0, flow_str = 'Exporting'; else, flow_str = 'Importing'; end
-    
-    full_title = {['Interaction (Mean Features): ' title_text]; ...
-                  sprintf('Target: MG%d | Day %d, %02d:%02d | $Q_{t}^{%d}=%.2f$ L/s (%s)', mg, d, h, m, mg, qt, flow_str)};
+    full_title = {['Interaction: ' title_text]; ...
+                  sprintf('Target: MG%d | Day %d, %02d:%02d | %s = %.2f', mg, d, h, m, target_sym, val)};
               
     title(full_title, 'FontName','Times New Roman','FontSize',font_t, 'Interpreter','latex');
     

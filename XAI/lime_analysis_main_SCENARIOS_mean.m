@@ -16,17 +16,28 @@
 close all; clear; clc;
 
 % --- CONFIGURACIÓN ---
-NUM_RUNS = 1; % Aumentar para resultados finales (ej. 10 o 20)
-fprintf('--- LIME INTERCAMBIO (Q_t): ANÁLISIS CON FEATURE ENGINEERING (MEAN) ---\n');
+TIPO_MODELO = 'TS'; % <--- CAMBIA ESTO A 'AR' O 'TS' SEGÚN NECESITES
+NUM_RUNS = 1;
+fprintf('--- LIME INTERCAMBIO (Q_t): ANÁLISIS (Modelo: %s) ---\n', TIPO_MODELO);
 
 %% 1. CARGA DE DATOS
 try
-    results = load('results_mpc/resultados_mpc_3mg_7dias.mat');
+    % Construcción dinámica del nombre del archivo
+    nombre_archivo = sprintf('results_mpc/resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
+    
+    if isfile(nombre_archivo)
+        results = load(nombre_archivo);
+    else
+        % Fallback por si acaso existe el archivo antiguo
+        warning('No se halló %s. Intentando archivo genérico...', nombre_archivo);
+        results = load('results_mpc/resultados_mpc_3mg_7dias.mat');
+    end
+    
     profiles = load('utils/full_profiles_for_sim.mat');
     mg = results.mg;
-    fprintf('Datos cargados correctamente.\n');
+    fprintf('Datos cargados correctamente: %s\n', nombre_archivo);
 catch
-    error('Faltan archivos. Ejecute main_mpc.m');
+    error('Faltan archivos. Ejecute main_mpc.m con el modelo %s.', TIPO_MODELO);
 end
 
 Q_t = results.Q_t; 
@@ -101,7 +112,7 @@ scenarios(3).name = 'DirectSatisfaction'; scenarios(3).k_list = k_direct_vec;
 
 %% 3. PRE-COMPILACIÓN
 fprintf('\nCompilando Controlador MPC 3-MG...\n');
-[~, params_init] = reconstruct_state_matlab_3mg(k_peak_global);
+[~, params_init] = reconstruct_state_matlab_3mg(k_peak_global, TIPO_MODELO);
 controller_obj = get_compiled_mpc_controller_3mg(params_init.mg);
 
 %% 4. BUCLE MAESTRO
@@ -117,7 +128,7 @@ for s_idx = 1:length(scenarios)
         fprintf('  > Analizando MG%d en K=%d... ', t_idx, k_target_actual);
         
         % A. Reconstruir Estado Original
-        [estado, params] = reconstruct_state_matlab_3mg(k_target_actual);
+        [estado, params] = reconstruct_state_matlab_3mg(k_target_actual, TIPO_MODELO);
         
         % --- B. CORRECCIÓN: CÁLCULO DE PROMEDIOS (Desde estado.constants) ---
         % Usamos 'estado.constants' porque ahí seguro están las matrices completas
@@ -185,8 +196,8 @@ for s_idx = 1:length(scenarios)
         
         feature_names = estado.feature_names;
         
-        % Guardamos con sufijo _MEAN
-        filename = sprintf('lime_Scenario_%s_MG%d_MEAN.mat', scn.name, t_idx);
+        % Guardamos incluyendo el TIPO_MODELO en el nombre
+        filename = sprintf('lime_Scenario_%s_%s_MG%d_MEAN.mat', scn.name, TIPO_MODELO, t_idx);
         K_TARGET = k_target_actual; 
         target_mg_idx = t_idx;
         
