@@ -1,17 +1,37 @@
 function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_TS(hist_data, N)
-    % GENERAR_PREDICCIONES_TS (Versión Optimizada)
+    % GENERAR_PREDICCIONES_TS (Versión Robusta)
     % Realiza la predicción recursiva a N pasos utilizando modelos Takagi-Sugeno.
-    % Optimización: Inlining de la inferencia difusa y vectorización de reglas.
+    % CORRECCIÓN: Búsqueda dinámica de la carpeta 'models'.
     
-    % Cargar modelos una sola vez (Persistencia)
     persistent modelos_ts
+    
     if isempty(modelos_ts)
-        if isfile('models/modelos_prediccion_TS.mat')
-            datos_cargados = load('models/modelos_prediccion_TS.mat');
-            modelos_ts = datos_cargados.modelos_ts;
-        else
-            error('No se encuentra models/modelos_prediccion_TS.mat');
+        % --- LÓGICA DE BÚSQUEDA ROBUSTA ---
+        fname = 'modelos_prediccion_TS.mat';
+        
+        % Posibles ubicaciones de la carpeta 'models'
+        possible_paths = {
+            fullfile('models', fname),           % Caso: Ejecución desde raíz
+            fullfile('..', 'models', fname),     % Caso: Ejecución desde XAI
+            fullfile('..', '..', 'models', fname) % Caso: Ejecución desde XAI/pumping
+        };
+        
+        file_found = '';
+        for i = 1:length(possible_paths)
+            if isfile(possible_paths{i})
+                file_found = possible_paths{i};
+                break;
+            end
         end
+        
+        if isempty(file_found)
+            error('generar_predicciones_TS:NoModel', ...
+                  'No se encuentra %s en ninguna ruta esperada.', fname);
+        end
+        
+        % Cargar
+        datos_cargados = load(file_found);
+        modelos_ts = datos_cargados.modelos_ts;
     end
     
     % Inicialización de salidas
@@ -37,12 +57,15 @@ function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_TS(hist_dat
             nombre_mod = sprintf('mg%d_%s_ts', i, tipo);
             
             % Extraer parámetros del struct para acceso rápido (evita lookups en bucle)
+            if ~isfield(modelos_ts, nombre_mod)
+                 error('Modelo %s no encontrado en la estructura cargada.', nombre_mod);
+            end
+            
             modelo = modelos_ts.(nombre_mod);
             centers = modelo.centers;   % [n_rules x n_lags]
             sigmas  = modelo.sigmas;    % [n_rules x n_lags]
             thetas  = modelo.thetas;    % [n_lags+1 x n_rules]
             lags    = modelo.num_regresores;
-            n_rules = size(centers, 1);
             
             % Validación de historia
             if length(historia) < lags
@@ -52,44 +75,29 @@ function [p_dem_pred, p_gen_pred, q_dem_pred] = generar_predicciones_TS(hist_dat
             % Vector de entrada inicial (fila)
             curr_input = historia(end-lags+1:end)'; 
             
-            % Bucle Recursivo de Predicción (Cuello de botella optimizado)
+            % Bucle Recursivo de Predicción
             predicciones_i = zeros(N, 1);
             
             for k = 1:N
-                % --- INFERENCIA DIFUSA VECTORIZADA (High Performance) ---
-                
                 % 1. Cálculo de Pertenencia (Membership)
-                % MATLAB R2016b+ soporta expansión implícita (Broadcasting)
-                % (Rules x Lags) - (1 x Lags) operan elemento a elemento por filas
                 diff_sq = (centers - curr_input).^2; 
-                
-                % Gaussiana multidimensional: exp(-dist^2 / 2sigma^2)
                 mu_matrix = exp(-diff_sq ./ (2 * sigmas.^2));
+                w = prod(mu_matrix, 2); % [n_rules x 1]
                 
-                % Producto de las dimensiones (AND lógico difuso) -> Grado de activación w
-                w = prod(mu_matrix, 2); % Vector columna [n_rules x 1]
-                
-                % 2. Normalización (Firing Strength)
+                % 2. Normalización
                 sum_w = sum(w);
-                if sum_w < 1e-12, sum_w = 1e-12; end % Evitar NaN
-                beta = w / sum_w; % [n_rules x 1]
+                if sum_w < 1e-12, sum_w = 1e-12; end 
+                beta = w / sum_w; 
                 
-                % 3. Evaluación de Consecuentes (Modelos Lineales)
-                % Entrada aumentada con bias: [1, x1, x2...]
+                % 3. Evaluación de Consecuentes
                 X_aug = [1, curr_input]; 
-                
-                % Cálculo simultáneo de todas las reglas:
-                % (1 x Lags+1) * (Lags+1 x Rules) = (1 x Rules)
                 y_local = X_aug * thetas; 
                 
-                % 4. Defusificación (Promedio Ponderado)
-                % Producto punto entre salidas locales y pesos normalizados
+                % 4. Defusificación
                 pred_val = y_local * beta; 
                 
                 % --- ACTUALIZACIÓN RECURSIVA ---
                 predicciones_i(k) = pred_val;
-                
-                % Desplazar ventana: eliminar el dato más viejo, agregar predicción
                 curr_input = [curr_input(2:end), pred_val];
             end
             
