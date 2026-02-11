@@ -1,112 +1,70 @@
-%% --- Archivo: lime_analysis_main_SCENARIOS_mean.m ---
+%% --- Archivo: lime_analysis_main_SCENARIOS_MOMENTS.m ---
 %
-% SCRIPT MAESTRO DE ANÁLISIS LIME (Variable: Q_t) - ENFOQUE PROMEDIO (MEAN)
+% SCRIPT MAESTRO DE ANÁLISIS DE ESCENARIOS (Q_t) - ENFOQUE MOMENTS (34 vars)
 %
-% MODIFICACIÓN CLAVE:
-% Las variables de entrada a LIME (P_gen, P_dem, Q_dem) se reemplazan por
-% el PROMEDIO del horizonte de predicción (N pasos).
-%
-% ACTUALIZACIÓN:
-% 1. Rutas corregidas para encontrar results_mpc.
-% 2. Muestra R^2 en consola.
-%
+% Objetivo: Explicar por qué se produce intercambio hídrico en momentos clave.
+% Usa: Autoencoder Denoising + Reconstrucción Z-Score.
+% Detección de Escenarios: Lógica "Ratio-Based" original del paper.
 %--------------------------------------------------------------------------
 close all; clear; clc;
 
 % --- CONFIGURACIÓN ---
-TIPO_MODELO = 'AR'; % <--- CAMBIA ESTO A 'AR' O 'TS' SEGÚN NECESITES
+TIPO_MODELO = 'AR'; % <--- CAMBIA A 'AR' O 'TS'
 NUM_RUNS = 1;
-fprintf('--- LIME INTERCAMBIO (Q_t): ANÁLISIS (Modelo: %s) ---\n', TIPO_MODELO);
 
-%% 1. CARGA DE DATOS (RUTAS CORREGIDAS)
+fprintf('--- LIME INTERCAMBIO (SCENARIOS + MOMENTS) - Modelo: %s ---\n', TIPO_MODELO);
+
+%% 1. CARGA DE DATOS
 try
-    % Nombre del archivo a buscar
-    fname_base = sprintf('resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
-    
-    % Rutas posibles (Priorizando la ruta absoluta solicitada y relativas estándar)
-    possible_paths = { ...
-        fullfile('C:', 'Users', 'hayte', 'Documents', 'MATLAB', 'sistema_micro-redes', 'results_mpc'), ... % Ruta Absoluta
-        fullfile('..', 'results_mpc'), ... 
-        'results_mpc', ... 
-        '.' ... 
-    };
-    
-    fname = '';
-    for i = 1:length(possible_paths)
-        p = fullfile(possible_paths{i}, fname_base);
-        if isfile(p)
-            fname = p;
-            break;
-        end
-    end
-    
-    if isempty(fname)
-        error('Datos no encontrados. Verifique que el archivo %s exista en la carpeta results_mpc.', fname_base);
-    end
-    
-    results = load(fname);
-    
-    % Cargar perfiles (Buscando en utils)
-    possible_utils = { ...
-        fullfile('C:', 'Users', 'hayte', 'Documents', 'MATLAB', 'sistema_micro-redes', 'utils'), ...
-        fullfile('..', 'utils'), ...
-        'utils' ...
-    };
-    fname_prof = '';
-    for i = 1:length(possible_utils)
-        p = fullfile(possible_utils{i}, 'full_profiles_for_sim.mat');
-        if isfile(p), fname_prof = p; break; end
-    end
-    if isempty(fname_prof), error('No se encontró full_profiles_for_sim.mat'); end
-    profiles = load(fname_prof);
-    
-    mg = results.mg;
-    fprintf('Datos cargados correctamente: %s\n', fname);
-catch ME
-    error(ME.message);
-end
+    fname = sprintf('resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
+    possible_paths = {fullfile('..', '..', 'results_mpc'), fullfile('..', 'results_mpc'), 'results_mpc', '.'};
+    found = ''; for i=1:length(possible_paths), if isfile(fullfile(possible_paths{i}, fname)), found=fullfile(possible_paths{i}, fname); break; end; end
+    if isempty(found), error('Datos no encontrados'); end
+    results = load(found); mg = results.mg; profiles = load('utils/full_profiles_for_sim.mat'); 
+    fprintf('Datos cargados: %s\n', found);
+catch ME, error(ME.message); end
 
-Q_t = results.Q_t; 
-Q_p = results.Q_p; 
-Q_buy = results.Q_DNO; 
-Q_dem_full = profiles.Q_dem_sim; 
+Q_t = results.Q_t; Q_p = results.Q_p; Q_buy = results.Q_DNO; Q_dem_full = profiles.Q_dem_sim;
 
-% Índices válidos
-Ts_ratio = mg(1).Ts_mpc / mg(1).Ts_sim;
-indices_mpc = 1:Ts_ratio:size(Q_t, 1);
+% Índices
+Ts_ratio = mg(1).Ts_mpc / mg(1).Ts_sim; indices_mpc = 1:Ts_ratio:size(Q_t, 1);
 if indices_mpc(end) > size(Q_t, 1), indices_mpc(end) = []; end
 
-%% 2. DETECCIÓN DE ESCENARIOS (Lógica Paper/Ratio)
+%% 2. DETECCIÓN DE ESCENARIOS (CRITERIOS ORIGINALES)
 
 % --- ESCENARIO A: GLOBAL PEAK (Sincrónico) ---
-intercambio_total = sum(abs(Q_t(indices_mpc, :)), 2);
-[~, idx_peak] = max(intercambio_total);
-k_peak_global = indices_mpc(idx_peak);
-k_peak_vec = [k_peak_global, k_peak_global, k_peak_global];
+intercambio_total = sum(abs(Q_t(indices_mpc, :)), 2); [~, idx_peak] = max(intercambio_total);
+k_peak_global = indices_mpc(idx_peak); k_peak_vec = [k_peak_global, k_peak_global, k_peak_global];
+
 fprintf('\n>>> A. GLOBAL PEAK (Sincrónico) <<<\n');
 fprintf('  Sistema: K=%d (Día %.2f)\n', k_peak_global, k_peak_global*mg(1).Ts_sim/86400);
 
-% --- ESCENARIO B: ALTRUISMO (Individual) ---
+% --- ESCENARIO B: ALTRUISMO (Individual) - Lógica Ratio Original ---
 k_alt_vec = zeros(1, 3);
 fprintf('\n>>> B. ALTRUISMO (Individual) <<<\n');
 for i=1:3
     q_t_sub = Q_t(indices_mpc, i);
     q_p_sub = Q_p(indices_mpc, i);
+    
     mask = (q_t_sub > 0.01) & (q_p_sub > 0.1);
     scores = zeros(size(q_t_sub));
+    
     if any(mask)
-        % Lógica Ratio (Reproduce resultados del paper)
+        % Lógica original del estudio: Ratio de eficiencia
         ratio = q_t_sub(mask) ./ (q_p_sub(mask) + 1e-6);
         ratio(ratio > 1) = 1; 
         scores(mask) = q_t_sub(mask) .* ratio;
+        
         [~, idx_sc] = max(scores);
         k_alt_vec(i) = indices_mpc(idx_sc);
+        fprintf('  MG%d: K=%d (Score=%.3f)\n', i, k_alt_vec(i), max(scores));
     else
         k_alt_vec(i) = k_peak_global;
+        fprintf('  MG%d: K=%d (Fallback Global)\n', i, k_alt_vec(i));
     end
 end
 
-% --- ESCENARIO C: DIRECT SATISFACTION (Individual) ---
+% --- ESCENARIO C: DIRECT SATISFACTION (Individual) - Lógica Original ---
 k_direct_vec = zeros(1, 3);
 fprintf('\n>>> C. DIRECT SATISFACTION (Pass-through) <<<\n');
 for i=1:3
@@ -117,25 +75,30 @@ for i=1:3
     
     mask = (q_t_sub < -0.1) & (q_dem_sub > 0.1);
     scores = zeros(size(q_t_sub));
+    
     if any(mask)
         import_val = abs(q_t_sub(mask));
         dem_val = q_dem_sub(mask);
         pump_val = q_p_sub(mask);
         buy_val = q_buy_sub(mask);
+        
         similarity = 1 - (abs(import_val - dem_val) ./ (import_val + dem_val));
         purity = 1 ./ (1 + pump_val + buy_val);
         scores(mask) = similarity .* purity .* import_val;
+        
         [~, idx_sc] = max(scores);
         k_direct_vec(i) = indices_mpc(idx_sc);
+        fprintf('  MG%d: K=%d (Score=%.3f)\n', i, k_direct_vec(i), max(scores));
     else
         [~, idx_fb] = min(q_t_sub); 
         k_direct_vec(i) = indices_mpc(idx_fb);
+        fprintf('  MG%d: K=%d (Fallback Max Import)\n', i, k_direct_vec(i));
     end
 end
 
-scenarios(1).name = 'GlobalPeak';         scenarios(1).k_list = k_peak_vec;
-scenarios(2).name = 'Altruismo';          scenarios(2).k_list = k_alt_vec;
-scenarios(3).name = 'DirectSatisfaction'; scenarios(3).k_list = k_direct_vec;
+scenarios(1).name='GlobalPeak'; scenarios(1).k_list=k_peak_vec;
+scenarios(2).name='Altruismo'; scenarios(2).k_list=k_alt_vec;
+scenarios(3).name='DirectSatisfaction'; scenarios(3).k_list=k_direct_vec;
 
 %% 3. PRE-COMPILACIÓN
 fprintf('\nCompilando Controlador MPC 3-MG...\n');
@@ -145,21 +108,20 @@ controller_obj = get_compiled_mpc_controller_3mg(params_init.mg);
 %% 4. BUCLE MAESTRO
 for s_idx = 1:length(scenarios)
     scn = scenarios(s_idx);
-    
     fprintf('\n==========================================================\n');
-    fprintf(' PROCESANDO ESCENARIO (MEAN): %s\n', scn.name);
+    fprintf(' PROCESANDO ESCENARIO (MOMENTS): %s\n', scn.name);
     fprintf('==========================================================\n');
     
     for t_idx = 1:3
-        k_target_actual = scn.k_list(t_idx);
-        fprintf('  > Analizando MG%d en K=%d... ', t_idx, k_target_actual);
+        k_target = scn.k_list(t_idx);
         
-        % A. Reconstruir Estado Original
-        [estado, params] = reconstruct_state_matlab_3mg(k_target_actual, TIPO_MODELO);
+        % A. Reconstruir (Esto reinicia a 16 vars)
+        [estado, params] = reconstruct_state_matlab_3mg(k_target, TIPO_MODELO);
         
-        % --- B. FEATURE ENGINEERING (MEAN) ---
+        % --- B. FEATURE ENGINEERING (34 VARS) ---
+        % Recuperar perfiles completos para calcular momentos
         try
-            P_dem_pred = estado.constants.p_dem_pred_full; 
+            P_dem_pred = estado.constants.p_dem_pred_full;
             P_gen_pred = estado.constants.p_gen_pred_full; 
             Q_dem_pred = estado.constants.q_dem_pred_full;
         catch
@@ -168,53 +130,47 @@ for s_idx = 1:length(scenarios)
             Q_dem_pred = params.Q_dem_pred;
         end
         
-        mean_P_dem = mean(P_dem_pred, 1);
-        mean_P_gen = mean(P_gen_pred, 1);
-        mean_Q_dem = mean(Q_dem_pred, 1);
+        % 1. Medias
+        m_P_dem = mean(P_dem_pred, 1); m_P_gen = mean(P_gen_pred, 1); m_Q_dem = mean(Q_dem_pred, 1);
+        % 2. Max
+        max_P_gen = max(P_gen_pred, [], 1); max_P_dem = max(P_dem_pred, [], 1); max_Q_dem = max(Q_dem_pred, [], 1);
+        % 3. Std
+        std_P_gen = std(P_gen_pred, 0, 1); std_P_dem = std(P_dem_pred, 0, 1); std_Q_dem = std(Q_dem_pred, 0, 1);
         
-        % Actualizar vector 16 vars
-        estado.X_original(3) = mean_P_dem(1); estado.X_original(4) = mean_P_gen(1); estado.X_original(5) = mean_Q_dem(1);
-        estado.X_original(8) = mean_P_dem(2); estado.X_original(9) = mean_P_gen(2); estado.X_original(10) = mean_Q_dem(2);
-        estado.X_original(13) = mean_P_dem(3); estado.X_original(14) = mean_P_gen(3); estado.X_original(15) = mean_Q_dem(3);
+        % Llenar Base (16 vars) con las nuevas medias calculadas
+        x_base = estado.X_original;
+        x_base([3,8,13]) = m_P_dem; x_base([4,9,14]) = m_P_gen; x_base([5,10,15]) = m_Q_dem;
         
-        % Nombres
-        names = estado.feature_names;
-        idx_replace = [3, 4, 5, 8, 9, 10, 13, 14, 15];
-        prefixes = {'P_dem', 'P_gen', 'Q_dem'};
-        count = 1;
-        for m = 1:3
-            for p = 1:3
-                old_name = names{idx_replace(count)};
-                new_name = strrep(old_name, prefixes{p}, ['Mean_' prefixes{p}]);
-                estado.feature_names{idx_replace(count)} = new_name;
-                count = count + 1;
-            end
-        end
+        % Concatenar 34 vars
+        estado.X_original = [x_base, max_P_gen, max_P_dem, max_Q_dem, std_P_gen, std_P_dem, std_Q_dem];
         
-        val_real = estado.Y_target_real_vector(t_idx);
-        fprintf('(Q_t Real = %.3f L/s)... ', val_real);
+        % Actualizar Nombres
+        for i=1:length(estado.feature_names), if ~startsWith(estado.feature_names{i},'Mean_') && i~=1 && i~=2 && i~=6 && i~=7 && i~=11 && i~=12 && i~=16, estado.feature_names{i}=['Mean_' estado.feature_names{i}]; end; end
         
-        % --- D. EJECUTAR LIME (CAPTURA R2) ---
-        % NOTA: Asume que calculate_lime_stability_3mg ha sido actualizada para devolver [stats, explanations]
-        % Si no es así, usar calculate_lime_stability_3mg_with_quality o similar.
-        [lime_stats, all_explanations] = calculate_lime_stability_3mg(estado, controller_obj, params, NUM_RUNS, t_idx);
+        new_names = {};
+        for i=1:3, new_names{end+1}=sprintf('Max_P_gen_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Max_P_dem_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Max_Q_dem_MG%d',i); end
+        for i=1:3, new_names{end+1}=sprintf('Std_P_gen_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Std_P_dem_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Std_Q_dem_MG%d',i); end
+        estado.feature_names = [estado.feature_names, new_names];
+        
+        % C. Ejecutar
+        val_real = results.Q_t(k_target, t_idx);
+        
+        fprintf('  > Analizando MG%d en K=%d... (Q_t=%.3f)... ', t_idx, k_target, val_real);
+        
+        % *** LLAMADA LIME INTERCAMBIO CON AE MOMENTS ***
+        [lime_stats, all_explanations] = calculate_lime_exchange_3mg_with_AE_MOMENTS_PARETO(estado, controller_obj, params, NUM_RUNS, t_idx);
         
         fprintf('R2=%.4f [OK]\n', lime_stats.R2_mean);
         
-        feature_names = estado.feature_names;
-        
         % Guardar
-        filename = sprintf('lime_Scenario_%s_%s_MG%d_MEAN.mat', scn.name, TIPO_MODELO, t_idx);
-        K_TARGET = k_target_actual; 
-        target_mg_idx = t_idx;
-        
-        save(filename, 'all_explanations', 'feature_names', 'lime_stats', 'estado', ...
-             'K_TARGET', 'target_mg_idx', 'scn');
+        filename = sprintf('lime_Scenario_%s_%s_MG%d_MOMENTS.mat', scn.name, TIPO_MODELO, t_idx);
+        K_TARGET = k_target; target_mg_idx = t_idx; feature_names = estado.feature_names;
+        save(filename, 'all_explanations', 'feature_names', 'lime_stats', 'K_TARGET', 'target_mg_idx', 'scn');
     end
 end
-fprintf('\n=== ANÁLISIS DE INTERCAMBIO (MEAN) COMPLETADO ===\n');
+fprintf('\n=== FIN ANÁLISIS ESCENARIOS MOMENTS ===\n');
 
-%% --- Helper: Compilador MPC ---
+% Helper Compilador
 function Controller = get_compiled_mpc_controller_3mg(mg_array)
     yalmip('clear');
     N = mg_array(1).N; Ts = mg_array(1).Ts_mpc; num_mg = 3;
