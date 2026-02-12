@@ -1,7 +1,7 @@
-%% --- Archivo: lime_temporal_exchange_main_3mg_STANDARD.m ---
+%% --- Archivo: lime_temporal_exchange_main_3mg_STANDARD_RAW_RBO.m ---
 %
 % ANÁLISIS TEMPORAL INTERCAMBIO (Q_t) - BENCHMARK STANDARD (34 VARS)
-% Usa feature engineering avanzado (Mean/Max/Std) pero perturbación simple.
+% Modificación: Guarda TODOS los runs (RAW) e incluye métrica RBO.
 %--------------------------------------------------------------------------
 close all; clear; clc;
 
@@ -9,9 +9,12 @@ close all; clear; clc;
 TIPO_MODELO = 'AR';      % <--- CAMBIA A 'AR' O 'TS'
 TARGETS = [1, 2, 3];     
 INTERVALO_HORAS = 12;    
-NUM_RUNS_PER_POINT = 1;  
 
-fprintf('--- LIME TEMPORAL INTERCAMBIO (STANDARD 34 VARS) - Modelo: %s ---\n', TIPO_MODELO);
+% Aumentado para permitir análisis de estabilidad
+NUM_RUNS_PER_POINT = 10;  
+RBO_P = 0.9;              % Persistencia del RBO (0.9 = énfasis en Top Rank)
+
+fprintf('--- LIME TEMPORAL (STANDARD 34 VARS) - Modelo: %s - Runs: %d - RBO_P: %.1f ---\n', TIPO_MODELO, NUM_RUNS_PER_POINT, RBO_P);
 
 % 2. Cargar Datos
 try
@@ -37,9 +40,14 @@ for t_idx = TARGETS
     temporal_results = struct();
     temporal_results.k_list = k_list;
     temporal_results.time_days = (k_list - 1) * Ts_sim / 86400;
-    temporal_results.weights_history = [];
+    
+    temporal_results.weights_history = [];      % Promedios
+    temporal_results.weights_raw_history = [];  % Matriz 3D
+    
     temporal_results.target_real_history = [];
-    temporal_results.quality_history = []; 
+    temporal_results.quality_history = [];      % R2
+    temporal_results.rbo_history = [];          % <--- NUEVO: RBO Promedio
+    temporal_results.rbo_std_history = [];      % <--- NUEVO: Desviación RBO
     temporal_results.feature_names = {}; 
     
     for idx = 1:length(k_list)
@@ -80,24 +88,68 @@ for t_idx = TARGETS
         
         temporal_results.quality_history(idx) = lime_stats.R2_mean;
         
-        % Promediar Pesos
+        % --- D. PROCESAMIENTO: PESOS Y RBO ---
         w_mat = zeros(length(temporal_results.feature_names), NUM_RUNS_PER_POINT);
+        run_rankings = cell(1, NUM_RUNS_PER_POINT);
+        
         for r = 1:NUM_RUNS_PER_POINT
-            d = all_explanations{r}; map_w = containers.Map(d(:,1), [d{:,2}]);
+            d = all_explanations{r}; 
+            
+            % 1. Mapa de pesos para matriz RAW
+            map_w = containers.Map(d(:,1), [d{:,2}]);
             for f = 1:length(temporal_results.feature_names)
                 name = temporal_results.feature_names{f};
                 if isKey(map_w, name), w_mat(f,r) = map_w(name); end
             end
+            
+            % 2. Extraer Ranking para RBO
+            weights = cell2mat(d(:,2));
+            [~, sort_idx] = sort(abs(weights), 'descend');
+            run_rankings{r} = d(sort_idx, 1);
         end
-        temporal_results.weights_history(:, idx) = mean(w_mat, 2);
         
-        fprintf('R2=%.4f [OK]\n', lime_stats.R2_mean);
+        % Calcular RBO Pairwise
+        rbo_values = [];
+        for i = 1:NUM_RUNS_PER_POINT
+            for j = i+1:NUM_RUNS_PER_POINT
+                score = calculate_rbo_score(run_rankings{i}, run_rankings{j}, RBO_P);
+                rbo_values = [rbo_values, score];
+            end
+        end
+        
+        if isempty(rbo_values), rbo_mean = 1; rbo_std = 0; else, rbo_mean = mean(rbo_values); rbo_std = std(rbo_values); end
+        
+        % Almacenar
+        temporal_results.rbo_history(idx) = rbo_mean;
+        temporal_results.rbo_std_history(idx) = rbo_std;
+        
+        % --- GUARDADO DUAL ---
+        temporal_results.weights_history(:, idx) = mean(w_mat, 2);
+        temporal_results.weights_raw_history(:, :, idx) = w_mat; 
+        
+        fprintf('R2=%.4f | RBO=%.4f [OK]\n', lime_stats.R2_mean, rbo_mean);
     end
     
-    filename_out = sprintf('lime_temporal_EXCHANGE_%s_MG%d_7days_STANDARD.mat', TIPO_MODELO, t_idx);
+    filename_out = sprintf('lime_temporal_EXCHANGE_%s_MG%d_7days_STANDARD_RAW_RBO.mat', TIPO_MODELO, t_idx);
     save(filename_out, 'temporal_results');
 end
-fprintf('\n--- FIN STANDARD ---\n');
+fprintf('\n--- FIN STANDARD RAW RBO ---\n');
+
+%% --- Helper: Cálculo de RBO (Rank Biased Overlap) ---
+function rbo = calculate_rbo_score(list1, list2, p)
+    % Calcula el Rank Biased Overlap entre dos listas ordenadas
+    if nargin < 3, p = 0.9; end
+    k = min(length(list1), length(list2));
+    sum_series = 0;
+    for d = 1:k
+        set1 = list1(1:d);
+        set2 = list2(1:d);
+        intersection_size = length(intersect(set1, set2));
+        A_d = intersection_size / d;
+        sum_series = sum_series + (p^(d-1)) * A_d;
+    end
+    rbo = (1 - p) * sum_series;
+end
 
 % Helper Compilador (Cópialo aquí igual que siempre)
 function Controller = get_compiled_mpc_controller_3mg(mg_array)

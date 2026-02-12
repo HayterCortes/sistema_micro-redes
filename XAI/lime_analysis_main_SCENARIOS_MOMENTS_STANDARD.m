@@ -1,16 +1,19 @@
-%% --- Archivo: lime_analysis_main_SCENARIOS_MOMENTS_STANDARD.m ---
+%% --- Archivo: lime_analysis_main_SCENARIOS_MOMENTS_STANDARD_RBO.m ---
 %
 % BENCHMARK: LIME STANDARD (Sin AE) para Intercambio (Q_t).
 % Usa 34 variables (Moments) pero perturba sin restringir al manifold.
 % Detección de Escenarios: Lógica "Ratio-Based" (Consistente con AE Moments).
+%
+% MODIFICACIÓN: Incluye cálculo de RBO (Rank Biased Overlap) para medir estabilidad.
 %--------------------------------------------------------------------------
 close all; clear; clc;
 
 % --- CONFIGURACIÓN ---
-TIPO_MODELO = 'AR'; % CAMBIA A 'TS' SI QUIERES
-NUM_RUNS = 1;
+TIPO_MODELO = 'AR';      % CAMBIA A 'TS' SI QUIERES
+NUM_RUNS = 10;           % <--- AUMENTADO para permitir cálculo de RBO
+RBO_P = 0.9;             % Persistencia del RBO (0.9 = énfasis en estabilidad profunda)
 
-fprintf('--- LIME INTERCAMBIO (BENCHMARK STANDARD - NO AE) - Modelo: %s ---\n', TIPO_MODELO);
+fprintf('--- LIME INTERCAMBIO (BENCHMARK STANDARD - NO AE) - Modelo: %s - Runs: %d ---\n', TIPO_MODELO, NUM_RUNS);
 
 % 1. CARGA DE DATOS
 try
@@ -27,11 +30,9 @@ Ts_ratio = mg(1).Ts_mpc / mg(1).Ts_sim; indices_mpc = 1:Ts_ratio:size(Q_t, 1);
 if indices_mpc(end) > size(Q_t, 1), indices_mpc(end) = []; end
 
 % 2. DETECCIÓN DE ESCENARIOS (LÓGICA RATIO - CONSISTENTE)
-
 % --- A. GLOBAL PEAK (Sincrónico) ---
 intercambio_total = sum(abs(Q_t(indices_mpc, :)), 2); [~, idx_peak] = max(intercambio_total);
 k_peak_global = indices_mpc(idx_peak); k_peak_vec = [k_peak_global, k_peak_global, k_peak_global];
-
 fprintf('\n>>> A. GLOBAL PEAK (Sincrónico) <<<\n');
 fprintf('  Sistema: K=%d (Día %.2f)\n', k_peak_global, k_peak_global*mg(1).Ts_sim/86400);
 
@@ -135,15 +136,76 @@ for s_idx = 1:length(scenarios)
         % *** LLAMADA LIME STANDARD ***
         [lime_stats, all_explanations] = calculate_lime_exchange_3mg_STANDARD_MOMENTS_PARETO(estado, controller_obj, params, NUM_RUNS, t_idx);
         
-        fprintf('R2=%.4f [OK]\n', lime_stats.R2_mean);
+        % --- CÁLCULO DE RBO (Rank Biased Overlap) ---
+        % Extraer rankings de todas las corridas
+        run_rankings = cell(1, NUM_RUNS);
+        for r = 1:NUM_RUNS
+            expl = all_explanations{r};
+            % expl es {Nombres, Pesos}. Ordenamos por valor absoluto del peso.
+            weights = cell2mat(expl(:,2));
+            [~, sort_idx] = sort(abs(weights), 'descend');
+            run_rankings{r} = expl(sort_idx, 1); % Lista de nombres ordenados
+        end
         
-        % Guardar con sufijo STANDARD
-        filename = sprintf('lime_Scenario_%s_%s_MG%d_STANDARD.mat', scn.name, TIPO_MODELO, t_idx);
+        % Calcular RBO pairwise
+        rbo_values = [];
+        for i = 1:NUM_RUNS
+            for j = i+1:NUM_RUNS
+                score = calculate_rbo_score(run_rankings{i}, run_rankings{j}, RBO_P);
+                rbo_values = [rbo_values, score];
+            end
+        end
+        
+        if isempty(rbo_values)
+            rbo_mean = 1; rbo_std = 0; % Caso 1 run
+        else
+            rbo_mean = mean(rbo_values);
+            rbo_std = std(rbo_values);
+        end
+        
+        % Guardar Stats RBO
+        rbo_stats.mean = rbo_mean;
+        rbo_stats.std = rbo_std;
+        rbo_stats.all_pairwise = rbo_values;
+        rbo_stats.p_param = RBO_P;
+        
+        fprintf('R2=%.4f | RBO=%.4f (+-%.4f) [OK]\n', lime_stats.R2_mean, rbo_mean, rbo_std);
+        
+        % Guardar con sufijo STANDARD_RBO
+        filename = sprintf('lime_Scenario_%s_%s_MG%d_STANDARD_RBO.mat', scn.name, TIPO_MODELO, t_idx);
         K_TARGET = k_target; target_mg_idx = t_idx; feature_names = estado.feature_names;
-        save(filename, 'all_explanations', 'feature_names', 'lime_stats', 'K_TARGET', 'target_mg_idx', 'scn');
+        save(filename, 'all_explanations', 'feature_names', 'lime_stats', 'rbo_stats', 'K_TARGET', 'target_mg_idx', 'scn');
     end
 end
-fprintf('\n=== FIN BENCHMARK STANDARD ===\n');
+fprintf('\n=== FIN BENCHMARK STANDARD CON RBO ===\n');
+
+%% --- Helper: Cálculo de RBO (Rank Biased Overlap) ---
+function rbo = calculate_rbo_score(list1, list2, p)
+    % Calcula el Rank Biased Overlap entre dos listas ordenadas
+    % p: Persistencia (0 < p < 1), usualmente 0.9
+    
+    if nargin < 3, p = 0.9; end
+    k = min(length(list1), length(list2));
+    x_d = 0;
+    sum_series = 0;
+    
+    for d = 1:k
+        % Conjuntos hasta la profundidad d
+        set1 = list1(1:d);
+        set2 = list2(1:d);
+        
+        % Intersección
+        intersection_size = length(intersect(set1, set2));
+        
+        % Acuerdo en profundidad d
+        A_d = intersection_size / d;
+        
+        % Suma ponderada
+        sum_series = sum_series + (p^(d-1)) * A_d;
+    end
+    
+    rbo = (1 - p) * sum_series;
+end
 
 % Helper Compilador (Cópialo aquí igual que siempre)
 function Controller = get_compiled_mpc_controller_3mg(mg_array)

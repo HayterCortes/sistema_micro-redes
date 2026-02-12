@@ -1,19 +1,22 @@
-%% --- Archivo: lime_temporal_exchange_main_3mg_MOMENTS_DENOISING.m ---
+%% --- Archivo: lime_temporal_exchange_main_3mg_MOMENTS_DENOISING_RAW_RBO.m ---
 %
 % ANÁLISIS TEMPORAL INTERCAMBIO (Q_t) - AE MOMENTS DENOISING (34 VARS)
-% La versión más avanzada: 34 features + Proyección en Manifold + Reconstrucción Z-Score.
+% Modificación: Guarda TODOS los runs (RAW) e incluye métrica RBO temporal.
 %--------------------------------------------------------------------------
 close all; clear; clc;
 
 % --- 1. CONFIGURACIÓN ---
-TIPO_MODELO = 'AR';      % <--- CAMBIA A 'AR' O 'TS'
+TIPO_MODELO = 'AR';      
 TARGETS = [1, 2, 3];     
 INTERVALO_HORAS = 12;    
-NUM_RUNS_PER_POINT = 1;  
 
-fprintf('--- LIME TEMPORAL INTERCAMBIO (AE MOMENTS DENOISING) - Modelo: %s ---\n', TIPO_MODELO);
+% IMPORTANTE: Para medir estabilidad, necesitas > 1 run (ej. 10, 30 o 50)
+NUM_RUNS_PER_POINT = 10;   % <--- MODIFICADO: Aumentado para tener estadística
+RBO_P = 0.9;               % Persistencia RBO (0.9 = énfasis en Top Rank)
 
-% 2. Cargar Datos (Mismo bloque)
+fprintf('--- LIME TEMPORAL (AE MOMENTS) - Modelo: %s - Runs: %d - RBO_P: %.1f ---\n', TIPO_MODELO, NUM_RUNS_PER_POINT, RBO_P);
+
+% 2. Cargar Datos 
 try
     fname = sprintf('resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
     possible_paths = {fullfile('..', '..', 'results_mpc'), fullfile('..', 'results_mpc'), 'results_mpc', '.'};
@@ -37,9 +40,14 @@ for t_idx = TARGETS
     temporal_results = struct();
     temporal_results.k_list = k_list;
     temporal_results.time_days = (k_list - 1) * Ts_sim / 86400;
-    temporal_results.weights_history = [];
+    
+    temporal_results.weights_history = [];      % Promedios (para gráficos simples)
+    temporal_results.weights_raw_history = [];  % Matriz 3D (Features x Runs x Tiempo)
+    
     temporal_results.target_real_history = [];
-    temporal_results.quality_history = []; 
+    temporal_results.quality_history = [];      % R2 promedio
+    temporal_results.rbo_history = [];          % <--- NUEVO: RBO promedio en el tiempo
+    temporal_results.rbo_std_history = [];      % <--- NUEVO: Desviación estándar del RBO
     temporal_results.feature_names = {}; 
     
     for idx = 1:length(k_list)
@@ -48,7 +56,7 @@ for t_idx = TARGETS
         % A. Reconstruir
         [estado, params] = reconstruct_state_matlab_3mg(k_target, TIPO_MODELO);
         
-        % B. Feature Engineering (34 VARS - Idéntico al Standard)
+        % B. Feature Engineering (34 VARS)
         P_dem = estado.constants.p_dem_pred_full; P_gen = estado.constants.p_gen_pred_full; Q_dem = estado.constants.q_dem_pred_full;
         m_P_dem = mean(P_dem,1); m_P_gen = mean(P_gen,1); m_Q_dem = mean(Q_dem,1);
         max_P_gen = max(P_gen,[],1); max_P_dem = max(P_dem,[],1); max_Q_dem = max(Q_dem,[],1);
@@ -67,40 +75,83 @@ for t_idx = TARGETS
         
         if idx == 1, temporal_results.feature_names = estado.feature_names; end
         
-        % C. Compilar
+        % C. Compilar y Ejecutar
         controller_obj = get_compiled_mpc_controller_3mg(params.mg);
         val_real = results.Q_t(k_target, t_idx);
         temporal_results.target_real_history(idx) = val_real;
         
         fprintf('K=%d (Q_t=%.3f)... ', k_target, val_real);
         
-        % *** LLAMADA LIME AE MOMENTS ***
+        % *** LLAMADA LIME ***
         [lime_stats, all_explanations] = calculate_lime_exchange_3mg_with_AE_MOMENTS(estado, controller_obj, params, NUM_RUNS_PER_POINT, t_idx);
         
         temporal_results.quality_history(idx) = lime_stats.R2_mean;
         
-        % Promediar Pesos
+        % --- D. CÁLCULO DE RBO TEMPORAL ---
+        run_rankings = cell(1, NUM_RUNS_PER_POINT);
         w_mat = zeros(length(temporal_results.feature_names), NUM_RUNS_PER_POINT);
+        
+        % 1. Extraer Rankings y Matriz de Pesos
         for r = 1:NUM_RUNS_PER_POINT
-            d = all_explanations{r}; map_w = containers.Map(d(:,1), [d{:,2}]);
+            d = all_explanations{r}; 
+            % Matriz de Pesos (Raw)
+            map_w = containers.Map(d(:,1), [d{:,2}]);
             for f = 1:length(temporal_results.feature_names)
                 name = temporal_results.feature_names{f};
                 if isKey(map_w, name), w_mat(f,r) = map_w(name); end
             end
+            % Rankings para RBO
+            weights = cell2mat(d(:,2));
+            [~, sort_idx] = sort(abs(weights), 'descend');
+            run_rankings{r} = d(sort_idx, 1);
         end
-        temporal_results.weights_history(:, idx) = mean(w_mat, 2);
         
-        fprintf('R2=%.4f [OK]\n', lime_stats.R2_mean);
+        % 2. Calcular RBO Pairwise
+        rbo_values = [];
+        for i = 1:NUM_RUNS_PER_POINT
+            for j = i+1:NUM_RUNS_PER_POINT
+                score = calculate_rbo_score(run_rankings{i}, run_rankings{j}, RBO_P);
+                rbo_values = [rbo_values, score];
+            end
+        end
+        
+        if isempty(rbo_values), rbo_mean = 1; rbo_std = 0; else, rbo_mean = mean(rbo_values); rbo_std = std(rbo_values); end
+        
+        % Almacenar Métricas
+        temporal_results.rbo_history(idx) = rbo_mean;
+        temporal_results.rbo_std_history(idx) = rbo_std;
+        
+        % --- SECCIÓN DE GUARDADO ---
+        temporal_results.weights_history(:, idx) = mean(w_mat, 2);      % Promedio
+        temporal_results.weights_raw_history(:, :, idx) = w_mat;        % Raw (3D)
+        
+        fprintf('R2=%.4f | RBO=%.4f [OK]\n', lime_stats.R2_mean, rbo_mean);
     end
     
-    filename_out = sprintf('lime_temporal_EXCHANGE_%s_MG%d_7days_AE_MOMENTS.mat', TIPO_MODELO, t_idx);
+    filename_out = sprintf('lime_temporal_EXCHANGE_%s_MG%d_7days_AE_MOMENTS_RAW_RBO.mat', TIPO_MODELO, t_idx);
     save(filename_out, 'temporal_results');
 end
-fprintf('\n--- FIN AE MOMENTS ---\n');
+fprintf('\n--- FIN AE MOMENTS RAW RBO ---\n');
 
-% Helper Compilador (Cópialo aquí igual que siempre)
+%% --- Helper: Cálculo de RBO (Rank Biased Overlap) ---
+function rbo = calculate_rbo_score(list1, list2, p)
+    % Calcula el Rank Biased Overlap entre dos listas ordenadas
+    if nargin < 3, p = 0.9; end
+    k = min(length(list1), length(list2));
+    sum_series = 0;
+    for d = 1:k
+        set1 = list1(1:d);
+        set2 = list2(1:d);
+        intersection_size = length(intersect(set1, set2));
+        A_d = intersection_size / d;
+        sum_series = sum_series + (p^(d-1)) * A_d;
+    end
+    rbo = (1 - p) * sum_series;
+end
+
+% (MANTENER LA FUNCIÓN HELPER 'get_compiled_mpc_controller_3mg' IGUAL AL FINAL)
 function Controller = get_compiled_mpc_controller_3mg(mg_array)
-    % (Pegar código del helper YALMIP completo aquí)
+    % ... (Tu código YALMIP original aquí) ...
     yalmip('clear');
     N = mg_array(1).N; Ts = mg_array(1).Ts_mpc; num_mg = 3;
     soC_0_var = sdpvar(1, 3, 'full'); v_tank_0_var = sdpvar(1, 3, 'full'); v_aq_0_var = sdpvar(1, 1, 'full');

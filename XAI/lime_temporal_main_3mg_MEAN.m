@@ -1,142 +1,116 @@
-%% --- Archivo: lime_temporal_main_3mg_MEAN.m ---
+%% --- Archivo: lime_temporal_main_3mg_MEAN_RAW_RBO.m ---
 %
-% ANÁLISIS TEMPORAL LIME 3-MG (VERSIÓN MEAN + AR/TS + R2 QUALITY)
-% Ejecuta LIME a lo largo de los 7 días usando características PROMEDIO.
-%
-% CORRECCIÓN: Llamada directa a función (sin evalc) para recuperar stats.
+% ANÁLISIS TEMPORAL LIME 3-MG (VERSIÓN MEAN + AR/TS)
+% Modificación: Selector de Perturbación (GAUSSIAN vs PARETO) + RBO.
 %--------------------------------------------------------------------------
 close all; clear; clc;
 
-% --- 1. CONFIGURACIÓN ---
-TIPO_MODELO = 'TS';      % <--- CAMBIA ESTO A 'AR' O 'TS'
-TARGETS = [1, 2, 3];     % Analizar las 3 MGs
-INTERVALO_HORAS = 12;     % Ejecutar LIME cada X horas
-NUM_RUNS_PER_POINT = 1;  % Ejecuciones por punto
+% --- CONFIGURACIÓN ---
+TIPO_MODELO = 'AR';      
+TARGETS = [1, 2, 3];     
+INTERVALO_HORAS = 12;    
+NUM_RUNS_PER_POINT = 10;  
+RBO_P = 0.9;             
 
-fprintf('--- LIME TEMPORAL (MEAN FEATURES + R2) - Modelo: %s ---\n', TIPO_MODELO);
+% *** SELECTOR DE PERTURBACIÓN ***
+PERTURBATION_TYPE = 'PARETO'; % Opciones: 'GAUSSIAN' o 'PARETO'
 
-% 2. Cargar Datos
+fprintf('--- LIME TEMPORAL (MEAN) - Modelo: %s - Perturb: %s ---\n', TIPO_MODELO, PERTURBATION_TYPE);
+
+% 2. Cargar Datos (Rutas corregidas)
 try
-    fname = sprintf('../results_mpc/resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
-    if ~isfile(fname), fname = '../results_mpc/resultados_mpc_3mg_7dias.mat'; end
-    if ~isfile(fname), fname = sprintf('resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO); end
-    if ~isfile(fname), error('No se encuentra el archivo de resultados.'); end
-    
-    results = load(fname);
-    mg = results.mg;
-    fprintf('Datos cargados correctamente desde: %s\n', fname);
-catch ME
-    error('Error crítico cargando datos: %s', ME.message);
-end
+    fname = sprintf('resultados_mpc_%s_3mg_7dias.mat', TIPO_MODELO);
+    possible_paths = {fullfile('..', '..', 'results_mpc'), fullfile('..', 'results_mpc'), 'results_mpc', '.'};
+    found = ''; for i=1:length(possible_paths), if isfile(fullfile(possible_paths{i}, fname)), found=fullfile(possible_paths{i}, fname); break; end; end
+    if isempty(found), error('Datos no encontrados'); end
+    results = load(found); mg = results.mg; fprintf('Datos: %s\n', found);
+catch ME, error(ME.message); end
 
-% 3. Definir Vector de Tiempos
-Ts_sim = mg(1).Ts_sim;              
-Ts_mpc = mg(1).Ts_mpc;              
-paso_mpc = Ts_mpc / Ts_sim;  
+% 3. Tiempos
+Ts_sim = mg(1).Ts_sim; Ts_mpc = mg(1).Ts_mpc; paso_mpc = Ts_mpc / Ts_sim;  
 Total_Steps = length(results.SoC);
 steps_interval = (INTERVALO_HORAS * 3600) / Ts_sim;
 k_list_raw = 1 : steps_interval : Total_Steps;
-
 k_list = [];
-for k = k_list_raw
-    k_mpc_idx = round((k - 1) / paso_mpc);
-    k_adjusted = k_mpc_idx * paso_mpc + 1;
-    if k_adjusted < Total_Steps
-        k_list = [k_list, k_adjusted];
-    end
-end
-fprintf('Puntos temporales a analizar: %d (por cada MG)\n', length(k_list));
+for k = k_list_raw, k_adj = round((k-1)/paso_mpc)*paso_mpc + 1; if k_adj < Total_Steps, k_list = [k_list, k_adj]; end; end
 
 % --- 4. BUCLE PRINCIPAL ---
 for t_idx = TARGETS
-    fprintf('\n==================================================\n');
-    fprintf('   INICIANDO EVOLUCIÓN TEMPORAL: AGENTE MG %d\n', t_idx);
-    fprintf('==================================================\n');
+    fprintf('\n>>> TEMPORAL MEAN (%s) Q_t - MG %d <<<\n', PERTURBATION_TYPE, t_idx);
     
     temporal_results = struct();
     temporal_results.k_list = k_list;
     temporal_results.time_days = (k_list - 1) * Ts_sim / 86400;
-    temporal_results.weights_history = [];
+    temporal_results.perturbation = PERTURBATION_TYPE;
+    
+    temporal_results.weights_history = [];      
+    temporal_results.weights_raw_history = [];  
     temporal_results.target_real_history = [];
-    temporal_results.quality_history = []; 
+    temporal_results.quality_history = [];      
+    temporal_results.rbo_history = [];          
+    temporal_results.rbo_std_history = [];      
     temporal_results.feature_names = {}; 
     
-    % --- BUCLE INTERIOR (Tiempo) ---
     for idx = 1:length(k_list)
         k_target = k_list(idx);
-        day_curr = temporal_results.time_days(idx);
         
-        fprintf('MG%d -> Instante %d/%d (Día %.2f)... ', t_idx, idx, length(k_list), day_curr);
-        
-        % A. Reconstruir Estado
         [estado, params] = reconstruct_state_matlab_3mg(k_target, TIPO_MODELO);
         
-        % B. Feature Engineering (MEAN)
-        P_dem = estado.constants.p_dem_pred_full; 
-        P_gen = estado.constants.p_gen_pred_full; 
-        Q_dem = estado.constants.q_dem_pred_full; 
+        P_dem = estado.constants.p_dem_pred_full; P_gen = estado.constants.p_gen_pred_full; Q_dem = estado.constants.q_dem_pred_full;
         m_P_dem = mean(P_dem, 1); m_P_gen = mean(P_gen, 1); m_Q_dem = mean(Q_dem, 1);
         
-        base_idx = [3, 8, 13];
-        for m = 1:3
-            bi = base_idx(m);
-            estado.X_original(bi)   = m_P_dem(m); 
-            estado.X_original(bi+1) = m_P_gen(m); 
-            estado.X_original(bi+2) = m_Q_dem(m);
-            if idx == 1
-                for p=0:2
-                    current_name = estado.feature_names{bi+p};
-                    if ~startsWith(current_name, 'Mean_')
-                        estado.feature_names{bi+p} = ['Mean_' current_name];
-                    end
-                end
-            end
-        end
+        estado.X_original(3) = m_P_dem(1); estado.X_original(4) = m_P_gen(1); estado.X_original(5) = m_Q_dem(1);
+        estado.X_original(8) = m_P_dem(2); estado.X_original(9) = m_P_gen(2); estado.X_original(10) = m_Q_dem(2);
+        estado.X_original(13) = m_P_dem(3); estado.X_original(14) = m_P_gen(3); estado.X_original(15) = m_Q_dem(3);
+        
+        for i=1:length(estado.feature_names), if ~startsWith(estado.feature_names{i},'Mean_') && i~=1 && i~=2 && i~=6 && i~=7 && i~=11 && i~=12 && i~=16, estado.feature_names{i}=['Mean_' estado.feature_names{i}]; end; end
+        
         if idx == 1, temporal_results.feature_names = estado.feature_names; end
         
-        % C. Compilar
         controller_obj = get_compiled_mpc_controller_3mg(params.mg);
-        
-        % D. Valor Real
-        if isfield(estado, 'Y_target_real_vector')
-            val_real = estado.Y_target_real_vector(t_idx);
-        else
-            val_real = 0; 
-        end
+        val_real = results.Q_t(k_target, t_idx);
         temporal_results.target_real_history(idx) = val_real;
         
-        % E. Ejecutar LIME (LLAMADA DIRECTA CORREGIDA)
-        % Eliminamos evalc para recibir las estructuras correctamente
-        [lime_stats, all_explanations] = calculate_lime_stability_3mg_with_quality(estado, controller_obj, params, NUM_RUNS_PER_POINT, t_idx);
+        fprintf('K=%d (Q_t=%.3f)... ', k_target, val_real);
         
-        % Almacenar R2
+        % *** LLAMADA LIME CON SELECTOR ***
+        [lime_stats, all_explanations] = calculate_lime_stability_3mg_with_quality(estado, controller_obj, params, NUM_RUNS_PER_POINT, t_idx, PERTURBATION_TYPE);
+        
         temporal_results.quality_history(idx) = lime_stats.R2_mean;
         
-        % F. Procesar Pesos
-        weights_mat = zeros(length(temporal_results.feature_names), NUM_RUNS_PER_POINT);
+        % Cálculo RBO
+        w_mat = zeros(length(temporal_results.feature_names), NUM_RUNS_PER_POINT);
+        run_rankings = cell(1, NUM_RUNS_PER_POINT);
         for r = 1:NUM_RUNS_PER_POINT
-            run_data = all_explanations{r};
-            map_w = containers.Map(run_data(:,1), [run_data{:,2}]);
-            for f = 1:length(temporal_results.feature_names)
-                name = temporal_results.feature_names{f};
-                if isKey(map_w, name), weights_mat(f, r) = map_w(name); else, weights_mat(f, r) = 0; end
-            end
+            d = all_explanations{r}; 
+            map_w = containers.Map(d(:,1), [d{:,2}]);
+            for f = 1:length(temporal_results.feature_names), name = temporal_results.feature_names{f}; if isKey(map_w, name), w_mat(f,r) = map_w(name); end; end
+            weights = cell2mat(d(:,2)); [~, sort_idx] = sort(abs(weights), 'descend'); run_rankings{r} = d(sort_idx, 1);
         end
-        temporal_results.weights_history(:, idx) = mean(weights_mat, 2);
+        rbo_values = []; for i = 1:NUM_RUNS_PER_POINT, for j = i+1:NUM_RUNS_PER_POINT, score = calculate_rbo_score(run_rankings{i}, run_rankings{j}, RBO_P); rbo_values = [rbo_values, score]; end; end
+        if isempty(rbo_values), rbo_mean = 1; rbo_std = 0; else, rbo_mean = mean(rbo_values); rbo_std = std(rbo_values); end
         
-        fprintf('[OK] (Q_t=%.3f, R2=%.4f)\n', val_real, lime_stats.R2_mean);
+        temporal_results.rbo_history(idx) = rbo_mean;
+        temporal_results.rbo_std_history(idx) = rbo_std;
+        temporal_results.weights_history(:, idx) = mean(w_mat, 2);
+        temporal_results.weights_raw_history(:, :, idx) = w_mat; 
+        
+        fprintf('R2=%.4f | RBO=%.4f [OK]\n', lime_stats.R2_mean, rbo_mean);
     end
     
-    % Guardado
-    filename_out = sprintf('lime_temporal_%s_MG%d_7days_MEAN.mat', TIPO_MODELO, t_idx);
+    filename_out = sprintf('lime_temporal_%s_MG%d_7days_MEAN_RAW_RBO_%s.mat', TIPO_MODELO, t_idx, PERTURBATION_TYPE);
     save(filename_out, 'temporal_results');
-    fprintf('--> Datos guardados en %s\n', filename_out);
 end
-fprintf('\n--- FIN ---\n');
+fprintf('\n--- FIN PROCESO ---\n');
 
-%% --- HELPER: Compilador ---
+% Helpers RBO y Compilador
+function rbo = calculate_rbo_score(list1, list2, p)
+    if nargin < 3, p = 0.9; end; k = min(length(list1), length(list2)); sum_series = 0;
+    for d = 1:k, set1 = list1(1:d); set2 = list2(1:d); intersection_size = length(intersect(set1, set2)); A_d = intersection_size / d; sum_series = sum_series + (p^(d-1)) * A_d; end
+    rbo = (1 - p) * sum_series;
+end
 function Controller = get_compiled_mpc_controller_3mg(mg_array)
-    % (Mismo código del compilador que ya tenías, sin cambios necesarios aquí)
+    % (Pegar código del compilador YALMIP completo aquí)
     yalmip('clear');
     N = mg_array(1).N; Ts = mg_array(1).Ts_mpc; num_mg = 3;
     soC_0_var = sdpvar(1, 3, 'full'); v_tank_0_var = sdpvar(1, 3, 'full'); v_aq_0_var = sdpvar(1, 1, 'full');
