@@ -6,12 +6,12 @@
 close all; clear; clc;
 
 % --- CONFIGURACIÓN ---
-TIPO_MODELO = 'AR';      
-NUM_RUNS = 10;           
+TIPO_MODELO = 'TS';      
+NUM_RUNS = 2;           
 RBO_P = 0.9;             
 
 % *** SELECTOR DE PERTURBACIÓN ***
-PERTURBATION_TYPE = 'PARETO'; % Opciones: 'GAUSSIAN' o 'PARETO'
+PERTURBATION_TYPE = 'GAUSSIAN'; % Opciones: 'GAUSSIAN' o 'PARETO'
 
 fprintf('--- LIME MEAN SCENARIOS - Modelo: %s - Perturb: %s ---\n', TIPO_MODELO, PERTURBATION_TYPE);
 

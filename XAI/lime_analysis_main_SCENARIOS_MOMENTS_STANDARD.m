@@ -2,18 +2,20 @@
 %
 % BENCHMARK: LIME STANDARD (Sin AE) para Intercambio (Q_t).
 % Usa 34 variables (Moments) pero perturba sin restringir al manifold.
-% Detección de Escenarios: Lógica "Ratio-Based" (Consistente con AE Moments).
 %
-% MODIFICACIÓN: Incluye cálculo de RBO (Rank Biased Overlap) para medir estabilidad.
+% MODIFICACIÓN: Incluye Selector de Perturbación (GAUSSIAN / PARETO).
 %--------------------------------------------------------------------------
 close all; clear; clc;
 
 % --- CONFIGURACIÓN ---
-TIPO_MODELO = 'AR';      % CAMBIA A 'TS' SI QUIERES
-NUM_RUNS = 10;           % <--- AUMENTADO para permitir cálculo de RBO
-RBO_P = 0.9;             % Persistencia del RBO (0.9 = énfasis en estabilidad profunda)
+TIPO_MODELO = 'TS';      % 'AR' o 'TS'
+NUM_RUNS = 2;           % Cantidad de corridas para RBO
+RBO_P = 0.9;             
 
-fprintf('--- LIME INTERCAMBIO (BENCHMARK STANDARD - NO AE) - Modelo: %s - Runs: %d ---\n', TIPO_MODELO, NUM_RUNS);
+% *** SELECTOR DE PERTURBACIÓN ***
+PERTURBATION_TYPE = 'GAUSSIAN'; % Opciones: 'GAUSSIAN' o 'PARETO'
+
+fprintf('--- LIME INTERCAMBIO (STANDARD 34v) - Modelo: %s - Perturb: %s ---\n', TIPO_MODELO, PERTURBATION_TYPE);
 
 % 1. CARGA DE DATOS
 try
@@ -29,89 +31,67 @@ Q_t = results.Q_t; Q_p = results.Q_p; Q_buy = results.Q_DNO; Q_dem_full = profil
 Ts_ratio = mg(1).Ts_mpc / mg(1).Ts_sim; indices_mpc = 1:Ts_ratio:size(Q_t, 1);
 if indices_mpc(end) > size(Q_t, 1), indices_mpc(end) = []; end
 
-% 2. DETECCIÓN DE ESCENARIOS (LÓGICA RATIO - CONSISTENTE)
-% --- A. GLOBAL PEAK (Sincrónico) ---
+% 2. DETECCIÓN DE ESCENARIOS (LÓGICA RATIO)
+% --- A. GLOBAL PEAK ---
 intercambio_total = sum(abs(Q_t(indices_mpc, :)), 2); [~, idx_peak] = max(intercambio_total);
 k_peak_global = indices_mpc(idx_peak); k_peak_vec = [k_peak_global, k_peak_global, k_peak_global];
 fprintf('\n>>> A. GLOBAL PEAK (Sincrónico) <<<\n');
 fprintf('  Sistema: K=%d (Día %.2f)\n', k_peak_global, k_peak_global*mg(1).Ts_sim/86400);
 
-% --- B. ALTRUISMO (Individual) - Lógica Ratio ---
+% --- B. ALTRUISMO ---
 k_alt_vec = zeros(1, 3);
 fprintf('\n>>> B. ALTRUISMO (Individual) <<<\n');
 for i=1:3
-    q_t_sub = Q_t(indices_mpc, i);
-    q_p_sub = Q_p(indices_mpc, i);
-    
-    mask = (q_t_sub > 0.01) & (q_p_sub > 0.1);
-    scores = zeros(size(q_t_sub));
-    
+    q_t_sub = Q_t(indices_mpc, i); q_p_sub = Q_p(indices_mpc, i);
+    mask = (q_t_sub > 0.01) & (q_p_sub > 0.1); scores = zeros(size(q_t_sub));
     if any(mask)
-        % Lógica Ratio (Consistente con script AE)
-        ratio = q_t_sub(mask) ./ (q_p_sub(mask) + 1e-6);
-        ratio(ratio > 1) = 1; 
+        ratio = q_t_sub(mask) ./ (q_p_sub(mask) + 1e-6); ratio(ratio > 1) = 1; 
         scores(mask) = q_t_sub(mask) .* ratio;
-        
-        [~, idx_sc] = max(scores);
-        k_alt_vec(i) = indices_mpc(idx_sc);
+        [~, idx_sc] = max(scores); k_alt_vec(i) = indices_mpc(idx_sc);
         fprintf('  MG%d: K=%d (Score=%.3f)\n', i, k_alt_vec(i), max(scores));
     else
-        k_alt_vec(i) = k_peak_global;
-        fprintf('  MG%d: K=%d (Fallback Global)\n', i, k_alt_vec(i));
+        k_alt_vec(i) = k_peak_global; fprintf('  MG%d: K=%d (Fallback)\n', i, k_alt_vec(i));
     end
 end
 
-% --- C. DIRECT SATISFACTION (Individual) - Lógica Original ---
+% --- C. DIRECT SATISFACTION ---
 k_direct_vec = zeros(1, 3);
 fprintf('\n>>> C. DIRECT SATISFACTION (Pass-through) <<<\n');
 for i=1:3
-    q_t_sub = Q_t(indices_mpc, i);
-    q_p_sub = Q_p(indices_mpc, i);
-    q_buy_sub = Q_buy(indices_mpc, i);
-    q_dem_sub = Q_dem_full(indices_mpc, i);
-    
-    mask = (q_t_sub < -0.1) & (q_dem_sub > 0.1);
-    scores = zeros(size(q_t_sub));
-    
+    q_t_sub = Q_t(indices_mpc, i); q_p_sub = Q_p(indices_mpc, i); q_buy_sub = Q_buy(indices_mpc, i); q_dem_sub = Q_dem_full(indices_mpc, i);
+    mask = (q_t_sub < -0.1) & (q_dem_sub > 0.1); scores = zeros(size(q_t_sub));
     if any(mask)
-        import_val = abs(q_t_sub(mask));
-        dem_val = q_dem_sub(mask);
-        pump_val = q_p_sub(mask);
-        buy_val = q_buy_sub(mask);
-        
-        similarity = 1 - (abs(import_val - dem_val) ./ (import_val + dem_val));
-        purity = 1 ./ (1 + pump_val + buy_val);
+        import_val = abs(q_t_sub(mask)); dem_val = q_dem_sub(mask); pump_val = q_p_sub(mask); buy_val = q_buy_sub(mask);
+        similarity = 1 - (abs(import_val - dem_val) ./ (import_val + dem_val)); purity = 1 ./ (1 + pump_val + buy_val);
         scores(mask) = similarity .* purity .* import_val;
-        
-        [~, idx_sc] = max(scores);
-        k_direct_vec(i) = indices_mpc(idx_sc);
+        [~, idx_sc] = max(scores); k_direct_vec(i) = indices_mpc(idx_sc);
         fprintf('  MG%d: K=%d (Score=%.3f)\n', i, k_direct_vec(i), max(scores));
     else
-        [~, idx_fb] = min(q_t_sub); 
-        k_direct_vec(i) = indices_mpc(idx_fb);
-        fprintf('  MG%d: K=%d (Fallback Max Import)\n', i, k_direct_vec(i));
+        [~, idx_fb] = min(q_t_sub); k_direct_vec(i) = indices_mpc(idx_fb); fprintf('  MG%d: K=%d (Fallback)\n', i, k_direct_vec(i));
     end
 end
-
 scenarios(1).name='GlobalPeak'; scenarios(1).k_list=k_peak_vec;
 scenarios(2).name='Altruismo'; scenarios(2).k_list=k_alt_vec;
 scenarios(3).name='DirectSatisfaction'; scenarios(3).k_list=k_direct_vec;
 
 % 3. BUCLE MAESTRO
+fprintf('\nCompilando Controlador MPC 3-MG...\n');
+[~, params_init] = reconstruct_state_matlab_3mg(k_peak_global, TIPO_MODELO);
+controller_obj = get_compiled_mpc_controller_3mg(params_init.mg);
+
 for s_idx = 1:length(scenarios)
     scn = scenarios(s_idx);
-    fprintf('\n>>> ESCENARIO: %s (STANDARD) <<<\n', scn.name);
+    fprintf('\n==========================================================\n');
+    fprintf(' PROCESANDO ESCENARIO (STANDARD %s): %s\n', PERTURBATION_TYPE, scn.name);
+    fprintf('==========================================================\n');
     
     for t_idx = 1:3
         k_target = scn.k_list(t_idx);
         [estado, params] = reconstruct_state_matlab_3mg(k_target, TIPO_MODELO);
         
-        % FEATURE ENGINEERING (34 VARS)
-        try
-            P_dem = estado.constants.p_dem_pred_full; P_gen = estado.constants.p_gen_pred_full; Q_dem = estado.constants.q_dem_pred_full;
-        catch
-            P_dem = params.P_dem_pred; P_gen = params.P_gen_pred; Q_dem = params.Q_dem_pred;
-        end
+        % Feature Engineering (34 VARS)
+        try, P_dem = estado.constants.p_dem_pred_full; P_gen = estado.constants.p_gen_pred_full; Q_dem = estado.constants.q_dem_pred_full;
+        catch, P_dem = params.P_dem_pred; P_gen = params.P_gen_pred; Q_dem = params.Q_dem_pred; end
         
         m_P_dem = mean(P_dem, 1); m_P_gen = mean(P_gen, 1); m_Q_dem = mean(Q_dem, 1);
         max_P_gen = max(P_gen, [], 1); max_P_dem = max(P_dem, [], 1); max_Q_dem = max(Q_dem, [], 1);
@@ -121,93 +101,55 @@ for s_idx = 1:length(scenarios)
         x_base([3,8,13]) = m_P_dem; x_base([4,9,14]) = m_P_gen; x_base([5,10,15]) = m_Q_dem;
         estado.X_original = [x_base, max_P_gen, max_P_dem, max_Q_dem, std_P_gen, std_P_dem, std_Q_dem];
         
-        % NOMBRES
+        % Nombres
         for i=1:length(estado.feature_names), if ~startsWith(estado.feature_names{i},'Mean_') && i~=1 && i~=2 && i~=6 && i~=7 && i~=11 && i~=12 && i~=16, estado.feature_names{i}=['Mean_' estado.feature_names{i}]; end; end
         new_names = {};
         for i=1:3, new_names{end+1}=sprintf('Max_P_gen_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Max_P_dem_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Max_Q_dem_MG%d',i); end
         for i=1:3, new_names{end+1}=sprintf('Std_P_gen_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Std_P_dem_MG%d',i); end; for i=1:3, new_names{end+1}=sprintf('Std_Q_dem_MG%d',i); end
         estado.feature_names = [estado.feature_names, new_names];
         
-        controller_obj = get_compiled_mpc_controller_3mg(params.mg);
         val_real = results.Q_t(k_target, t_idx);
-        
         fprintf('  MG%d (K=%d): Q_t=%.3f... ', t_idx, k_target, val_real);
         
-        % *** LLAMADA LIME STANDARD ***
-        [lime_stats, all_explanations] = calculate_lime_exchange_3mg_STANDARD_MOMENTS_PARETO(estado, controller_obj, params, NUM_RUNS, t_idx);
-        
-        % --- CÁLCULO DE RBO (Rank Biased Overlap) ---
-        % Extraer rankings de todas las corridas
-        run_rankings = cell(1, NUM_RUNS);
-        for r = 1:NUM_RUNS
-            expl = all_explanations{r};
-            % expl es {Nombres, Pesos}. Ordenamos por valor absoluto del peso.
-            weights = cell2mat(expl(:,2));
-            [~, sort_idx] = sort(abs(weights), 'descend');
-            run_rankings{r} = expl(sort_idx, 1); % Lista de nombres ordenados
-        end
-        
-        % Calcular RBO pairwise
-        rbo_values = [];
-        for i = 1:NUM_RUNS
-            for j = i+1:NUM_RUNS
-                score = calculate_rbo_score(run_rankings{i}, run_rankings{j}, RBO_P);
-                rbo_values = [rbo_values, score];
-            end
-        end
-        
-        if isempty(rbo_values)
-            rbo_mean = 1; rbo_std = 0; % Caso 1 run
+        % *** SELECCIÓN DE MÉTODO (GAUSSIAN vs PARETO) ***
+        if strcmp(PERTURBATION_TYPE, 'PARETO')
+             [lime_stats, all_explanations] = calculate_lime_exchange_3mg_STANDARD_MOMENTS_PARETO(...
+                 estado, controller_obj, params, NUM_RUNS, t_idx);
         else
-            rbo_mean = mean(rbo_values);
-            rbo_std = std(rbo_values);
+             % Por defecto asumimos Gaussian en el wrapper sin sufijo PARETO
+             [lime_stats, all_explanations] = calculate_lime_exchange_3mg_STANDARD_MOMENTS(...
+                 estado, controller_obj, params, NUM_RUNS, t_idx);
         end
         
-        % Guardar Stats RBO
-        rbo_stats.mean = rbo_mean;
-        rbo_stats.std = rbo_std;
-        rbo_stats.all_pairwise = rbo_values;
-        rbo_stats.p_param = RBO_P;
+        % RBO Calculation
+        run_rankings = cell(1, NUM_RUNS);
+        for r = 1:NUM_RUNS, [~,idx_s] = sort(abs(cell2mat(all_explanations{r}(:,2))), 'descend'); run_rankings{r} = all_explanations{r}(idx_s, 1); end
+        rbo_vals = []; for i=1:NUM_RUNS, for j=i+1:NUM_RUNS, rbo_vals=[rbo_vals, calculate_rbo_score(run_rankings{i}, run_rankings{j}, RBO_P)]; end; end
+        if isempty(rbo_vals), rbo_mean=1; rbo_std=0; else, rbo_mean=mean(rbo_vals); rbo_std=std(rbo_vals); end
         
-        fprintf('R2=%.4f | RBO=%.4f (+-%.4f) [OK]\n', lime_stats.R2_mean, rbo_mean, rbo_std);
+        rbo_stats.mean = rbo_mean; rbo_stats.std = rbo_std; rbo_stats.all_pairwise = rbo_vals; rbo_stats.p_param = RBO_P;
+        fprintf('R2=%.4f | RBO=%.4f [OK]\n', lime_stats.R2_mean, rbo_mean);
         
-        % Guardar con sufijo STANDARD_RBO
-        filename = sprintf('lime_Scenario_%s_%s_MG%d_STANDARD_RBO.mat', scn.name, TIPO_MODELO, t_idx);
+        % Guardado con Sufijo
+        filename = sprintf('lime_Scenario_%s_%s_MG%d_STANDARD_RBO_%s.mat', scn.name, TIPO_MODELO, t_idx, PERTURBATION_TYPE);
         K_TARGET = k_target; target_mg_idx = t_idx; feature_names = estado.feature_names;
         save(filename, 'all_explanations', 'feature_names', 'lime_stats', 'rbo_stats', 'K_TARGET', 'target_mg_idx', 'scn');
     end
 end
-fprintf('\n=== FIN BENCHMARK STANDARD CON RBO ===\n');
+fprintf('\n=== FIN BENCHMARK STANDARD ===\n');
 
-%% --- Helper: Cálculo de RBO (Rank Biased Overlap) ---
+% Helpers RBO y Compilador (Cópialos del script anterior)
 function rbo = calculate_rbo_score(list1, list2, p)
-    % Calcula el Rank Biased Overlap entre dos listas ordenadas
-    % p: Persistencia (0 < p < 1), usualmente 0.9
-    
     if nargin < 3, p = 0.9; end
     k = min(length(list1), length(list2));
-    x_d = 0;
     sum_series = 0;
-    
     for d = 1:k
-        % Conjuntos hasta la profundidad d
-        set1 = list1(1:d);
-        set2 = list2(1:d);
-        
-        % Intersección
-        intersection_size = length(intersect(set1, set2));
-        
-        % Acuerdo en profundidad d
-        A_d = intersection_size / d;
-        
-        % Suma ponderada
+        set1 = list1(1:d); set2 = list2(1:d);
+        intersection_size = length(intersect(set1, set2)); A_d = intersection_size / d;
         sum_series = sum_series + (p^(d-1)) * A_d;
     end
-    
     rbo = (1 - p) * sum_series;
 end
-
-% Helper Compilador (Cópialo aquí igual que siempre)
 function Controller = get_compiled_mpc_controller_3mg(mg_array)
     yalmip('clear');
     N = mg_array(1).N; Ts = mg_array(1).Ts_mpc; num_mg = 3;

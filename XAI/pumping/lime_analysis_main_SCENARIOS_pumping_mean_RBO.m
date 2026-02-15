@@ -12,12 +12,12 @@
 close all; clear; clc;
 
 % --- 1. CONFIGURACIÓN ---
-TIPO_MODELO = 'AR';      % 'AR' o 'TS'
+TIPO_MODELO = 'TS';      % 'AR' o 'TS'
 NUM_RUNS = 10;           % Cantidad de corridas para estadística RBO
 RBO_P = 0.9;             % Persistencia RBO (0.9 = énfasis en ranking superior)
 
 % *** SELECTOR DE PERTURBACIÓN ***
-PERTURBATION_TYPE = 'PARETO'; % Opciones: 'GAUSSIAN' o 'PARETO'
+PERTURBATION_TYPE = 'GAUSSIAN'; % Opciones: 'GAUSSIAN' o 'PARETO'
 
 fprintf('--- LIME PUMPING SCENARIOS (MEAN) - Modelo: %s - Perturb: %s ---\n', TIPO_MODELO, PERTURBATION_TYPE);
 
