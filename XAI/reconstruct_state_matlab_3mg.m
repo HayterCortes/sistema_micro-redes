@@ -229,8 +229,3 @@ function [estado, params] = reconstruct_state_matlab_3mg(K_GLOBAL_TARGET, TIPO_M
 
     params.mg = mg;
 end
-
-%% --- Función Auxiliar Local ---
-function y_sub = submuestreo_max(y, paso)
-    y_sub = y(1:paso:end, :);
-end

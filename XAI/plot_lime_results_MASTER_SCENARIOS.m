@@ -3,15 +3,17 @@
 % SCRIPT MAESTRO DE VISUALIZACIÓN DE ESCENARIOS (Q_t y Q_p)
 % Soporta: 3 Casos x 2 Perturbaciones x 2 Modelos.
 %
-% ESTRUCTURA DE SALIDA:
-%   figures_Scenarios /
-%       |-- Case_1_16_Features /
-%             |-- PARETO / AR, TS
-%             |-- GAUSSIAN / AR, TS
-%       |-- Case_2_34_Features_Std / ...
-%       |-- Case_3_34_Features_AE / ...
+% ESTRUCTURA DE ENTRADA (Lectura de .mat):
+%   - Exchange: 16_features_exchange, 34_features_exchange, 34_features_AE_exchange
+%   - Pumping: pumping/16_features_pump, pumping/34_features_pump, pumping/34_features_AE_pump
 %
-% INCLUYE: R2 promedio, RBO y Nro de ejecuciones en el título.
+% ESTRUCTURA DE SALIDA (Guardado de .pdf):
+%   figures_Scenarios / Case_X / Perturbación / Modelo
+%
+% FIX 1: Solucionado el error de sintaxis LaTeX en los títulos.
+% FIX 2: Cambio de notación para valores máximos a X_{max}.
+% FIX 3: Extracción del valor real (Ground Truth) de la simulación original.
+% FIX 4: Reconstrucción en vivo de X_values (Features) para evitar 0.00
 %--------------------------------------------------------------------------
 clear; clc; close all;
 
@@ -19,12 +21,29 @@ clear; clc; close all;
 SCENARIOS_LIST = {'GlobalPeak', 'Altruismo', 'DirectSatisfaction'};
 TARGETS_LIST = [1, 2, 3];
 
-% Definición de los 3 Casos de Estudio
-% Name: Nombre carpeta, Suffix: Identificador en nombre de archivo
-CASES(1).name = 'Case_1_16_Features_Mean';   CASES(1).suffix_ex = 'MEAN_RBO';     CASES(1).suffix_pp = 'MEAN_RBO';
-CASES(2).name = 'Case_2_34_Features_Std';    CASES(2).suffix_ex = 'STANDARD_RBO'; CASES(2).suffix_pp = 'STANDARD_RBO';
-CASES(3).name = 'Case_3_34_Features_AE';     CASES(3).suffix_ex = 'MOMENTS_RBO';  CASES(3).suffix_pp = 'MOMENTS_AE'; 
-% Nota: En Caso 3, Exchange se guardó como _MOMENTS_RBO_ y Pumping como _MOMENTS_AE_
+% Definición de los 3 Casos de Estudio (Incluyendo directorios de entrada)
+% ---------------------------------------------------------------------
+% CASO 1: 16 Features
+CASES(1).name = 'Case_1_16_Features_Mean';   
+CASES(1).suffix_ex = 'MEAN_RBO';     
+CASES(1).suffix_pp = 'MEAN_RBO';
+CASES(1).dir_ex = '16_features_exchange'; 
+CASES(1).dir_pp = fullfile('pumping', '16_features_pump');
+
+% CASO 2: 34 Features Standard
+CASES(2).name = 'Case_2_34_Features_Std';    
+CASES(2).suffix_ex = 'STANDARD_RBO'; 
+CASES(2).suffix_pp = 'STANDARD_RBO';
+CASES(2).dir_ex = '34_features_exchange'; 
+CASES(2).dir_pp = fullfile('pumping', '34_features_pump');
+
+% CASO 3: 34 Features + AE Moments
+CASES(3).name = 'Case_3_34_Features_AE';     
+CASES(3).suffix_ex = 'MOMENTS_RBO';  
+CASES(3).suffix_pp = 'MOMENTS_AE'; 
+CASES(3).dir_ex = '34_features_AE_exchange'; 
+CASES(3).dir_pp = fullfile('pumping', '34_features_AE_pump');
+% ---------------------------------------------------------------------
 
 PERTURBATIONS = {'PARETO', 'GAUSSIAN'};
 MODELS = {'AR', 'TS'};
@@ -48,7 +67,15 @@ for c_idx = 1:length(CASES)
         for m_idx = 1:length(MODELS)
             curr_model = MODELS{m_idx};
             
-            % Crear Estructura de Directorios
+            % Cargar los datos reales (Ground Truth) de la simulación original
+            gt_file = fullfile('..', 'results_mpc', sprintf('resultados_mpc_%s_3mg_7dias.mat', curr_model));
+            if isfile(gt_file)
+                gt_data = load(gt_file);
+            else
+                error('No se pudo encontrar el archivo original de resultados: %s', gt_file);
+            end
+            
+            % Crear Estructura de Directorios de Salida
             base_dir = fullfile('figures_Scenarios', curr_case.name, curr_pert, curr_model);
             if ~exist(base_dir, 'dir'), mkdir(base_dir); end
             
@@ -68,21 +95,23 @@ for c_idx = 1:length(CASES)
                 for t_idx = TARGETS_LIST
                     
                     % -----------------------------------------------------
-                    % A. PROCESAR INTERCAMBIO (Q_t) - Todos los escenarios
+                    % A. PROCESAR INTERCAMBIO (Q_t) 
                     % -----------------------------------------------------
-                    f_ex = sprintf('lime_Scenario_%s_%s_MG%d_%s_%s.mat', ...
+                    f_ex_name = sprintf('lime_Scenario_%s_%s_MG%d_%s_%s.mat', ...
                         scn_name, curr_model, t_idx, curr_case.suffix_ex, curr_pert);
                     
-                    process_and_plot(f_ex, base_dir, s_title, t_idx, false, agent_colors);
+                    f_ex = fullfile(curr_case.dir_ex, f_ex_name);
+                    process_and_plot(f_ex, base_dir, s_title, t_idx, false, agent_colors, gt_data, curr_model);
                     
                     % -----------------------------------------------------
                     % B. PROCESAR BOMBEO (Q_p) - Solo Escenario Altruismo
                     % -----------------------------------------------------
                     if strcmp(scn_name, 'Altruismo')
-                        f_pp = sprintf('lime_pumping_Scenario_%s_%s_MG%d_%s_%s.mat', ...
+                        f_pp_name = sprintf('lime_pumping_Scenario_%s_%s_MG%d_%s_%s.mat', ...
                             scn_name, curr_model, t_idx, curr_case.suffix_pp, curr_pert);
                         
-                        process_and_plot(f_pp, base_dir, s_title, t_idx, true, agent_colors);
+                        f_pp = fullfile(curr_case.dir_pp, f_pp_name);
+                        process_and_plot(f_pp, base_dir, s_title, t_idx, true, agent_colors, gt_data, curr_model);
                     end
                     
                 end % targets
@@ -96,58 +125,79 @@ fprintf('Verifique la carpeta "figures_Scenarios".\n');
 
 
 %% --- FUNCIÓN DE PROCESAMIENTO ---
-function process_and_plot(filename, output_dir, s_title_base, t_idx, is_pumping, colors)
+function process_and_plot(filename, output_dir, s_title_base, t_idx, is_pumping, colors, gt_data, curr_model)
     
     if ~isfile(filename)
-        return; % Si el archivo no existe, saltar silenciosamente
+        return; 
     end
     
     fprintf('    > Plotting: %s\n', filename);
     data = load(filename);
     
-    % 1. Extraer Datos
     all_explanations = data.all_explanations;
     feature_names = data.feature_names;
     
-    % Compatibilidad con diferentes versiones de guardado de X_original
+    % Recuperar K_TARGET para cálculos temporales
+    if isfield(data, 'K_TARGET'), K = data.K_TARGET; else, K = 1; end
+    
+    % --- RECONSTRUCCIÓN DE FEATURES (X_values) ---
     if isfield(data, 'estado')
         X_values = data.estado.X_original;
     elseif isfield(data, 'X_original')
         X_values = data.X_original;
     else
-        X_values = zeros(1, length(feature_names)); % Fallback
+        X_values = zeros(1, length(feature_names));
     end
     
-    % Recuperar Metadatos (R2, RBO, Runs)
-    if isfield(data, 'lime_stats')
-        r2_val = data.lime_stats.R2_mean;
-    else
-        r2_val = NaN;
+    % Si X_values son puros ceros, significa que no se guardaron. Los reconstruimos:
+    if all(X_values == 0)
+        try
+            [estado_rec, params_rec] = reconstruct_state_matlab_3mg(K, curr_model);
+            
+            try
+                P_dem_pred = estado_rec.constants.p_dem_pred_full;
+                P_gen_pred = estado_rec.constants.p_gen_pred_full; 
+                Q_dem_pred = estado_rec.constants.q_dem_pred_full;
+            catch
+                P_dem_pred = params_rec.P_dem_pred; 
+                P_gen_pred = params_rec.P_gen_pred; 
+                Q_dem_pred = params_rec.Q_dem_pred;
+            end
+            
+            m_P_dem = mean(P_dem_pred, 1); m_P_gen = mean(P_gen_pred, 1); m_Q_dem = mean(Q_dem_pred, 1);
+            max_P_gen = max(P_gen_pred, [], 1); max_P_dem = max(P_dem_pred, [], 1); max_Q_dem = max(Q_dem_pred, [], 1);
+            std_P_gen = std(P_gen_pred, 0, 1); std_P_dem = std(P_dem_pred, 0, 1); std_Q_dem = std(Q_dem_pred, 0, 1);
+            
+            x_base = estado_rec.X_original;
+            x_base([3,8,13]) = m_P_dem; x_base([4,9,14]) = m_P_gen; x_base([5,10,15]) = m_Q_dem;
+            
+            if length(feature_names) == 16
+                X_values = x_base;
+            elseif length(feature_names) == 34
+                X_values = [x_base, max_P_gen, max_P_dem, max_Q_dem, std_P_gen, std_P_dem, std_Q_dem];
+            end
+        catch ME
+            fprintf('      [!] Warning: No se pudo reconstruir X_values: %s\n', ME.message);
+        end
     end
+    % ----------------------------------------------
     
-    if isfield(data, 'rbo_stats')
-        rbo_val = data.rbo_stats.mean;
-    elseif isfield(data, 'rbo_mean') % Compatibilidad antigua
-        rbo_val = data.rbo_mean;
-    else
-        rbo_val = NaN;
-    end
-    
+    if isfield(data, 'lime_stats'), r2_val = data.lime_stats.R2_mean; else, r2_val = NaN; end
+    if isfield(data, 'rbo_stats'), rbo_val = data.rbo_stats.mean; elseif isfield(data, 'rbo_mean'), rbo_val = data.rbo_mean; else, rbo_val = NaN; end
     num_runs = length(all_explanations);
     
-    % Información temporal (para el título)
-    if isfield(data, 'K_TARGET'), K = data.K_TARGET; else, K = 1; end
     Ts_sim = 60; t_sec = (K-1)*Ts_sim;
     d = floor(t_sec/86400)+1; 
     rem = mod(t_sec, 86400); h = floor(rem/3600); m = round((rem - h*3600)/60);
     
-    % Valor Real
+    % Extracción del valor real preciso desde el Ground Truth
     real_val = 0;
-    if isfield(data, 'estado') && isfield(data.estado, 'Y_target_real_vector')
-        real_val = data.estado.Y_target_real_vector(t_idx);
+    if is_pumping
+        if isfield(gt_data, 'Q_p'), real_val = gt_data.Q_p(K, t_idx); end
+    else
+        if isfield(gt_data, 'Q_t'), real_val = gt_data.Q_t(K, t_idx); end
     end
     
-    % 2. Procesar Pesos (Media y Std)
     N_feat = length(feature_names);
     w_mat = zeros(N_feat, num_runs);
     
@@ -163,47 +213,38 @@ function process_and_plot(filename, output_dir, s_title_base, t_idx, is_pumping,
     avg_w = mean(w_mat, 2);
     std_w = std(w_mat, 0, 2);
     
-    % 3. Etiquetas y Grupos
     plot_labels = cell(N_feat, 1);
     groups = zeros(N_feat, 1);
     
     for i = 1:N_feat
         raw = feature_names{i};
-        % Identificar Agente
         if contains(raw,'MG1'), g=1; elseif contains(raw,'MG2'), g=2; elseif contains(raw,'MG3'), g=3; elseif contains(raw,'aq','IgnoreCase',true), g=4; else, g=4; end
         groups(i) = g;
         plot_labels{i} = parse_label_latex(raw, X_values(i));
     end
     
-    % Ordenar
-    [sorted_w, sort_idx] = sort(abs(avg_w), 'descend');
+    [~, sort_idx] = sort(abs(avg_w), 'descend');
     sorted_labels = plot_labels(sort_idx);
     sorted_real_w = avg_w(sort_idx);
     sorted_std = std_w(sort_idx);
     
-    % Porcentajes Interacción
     infl_agents = zeros(1,4);
     for g=1:4, infl_agents(g) = sum(abs(avg_w(groups==g))); end
     total = sum(infl_agents); if total<1e-9, total=1; end
     pct = (infl_agents/total)*100;
     
-    % 4. Configurar Textos
     if is_pumping
         target_sym = sprintf('$Q_{p}^{%d}$', t_idx);
         plot_title = [s_title_base ' (Pumping)'];
-        fname_suffix = '_PUMP';
     else
         target_sym = sprintf('$Q_{s}^{%d}$', t_idx);
         plot_title = s_title_base;
-        fname_suffix = '';
     end
     
-    % Nombres de Archivo de Salida (Sin extensión, la función añade .pdf)
     [~, name_core, ~] = fileparts(filename);
     f_rank = fullfile(output_dir, ['Ranking_' name_core]);
     f_int = fullfile(output_dir, ['Interaction_' name_core]);
     
-    % 5. Generar Plots
     create_ranking_plot(sorted_real_w, sorted_std, sorted_labels, plot_title, ...
         d, h, m, real_val, t_idx, target_sym, r2_val, rbo_val, num_runs, f_rank);
         
@@ -212,32 +253,49 @@ function process_and_plot(filename, output_dir, s_title_base, t_idx, is_pumping,
 end
 
 
-%% --- HELPER: LABEL PARSER (Latex) ---
-function lbl = parse_label_latex(raw, val)
-    is_mean = contains(raw, 'Mean_');
-    is_max = contains(raw, 'Max_');
-    is_std = contains(raw, 'Std_');
+%% --- HELPER: LABEL PARSER (Robust + Latex Fix) ---
+function label = parse_label_latex(raw_name, val)
+    is_mean = contains(raw_name, 'Mean_', 'IgnoreCase', true);
+    is_max  = contains(raw_name, 'Max_', 'IgnoreCase', true);
+    is_std  = contains(raw_name, 'Std_', 'IgnoreCase', true);
     
-    core = regexprep(raw, '(Mean_|Max_|Std_|MG\d_)', '');
+    core_name = regexprep(raw_name, '(Mean_|Max_|Std_|MG\d_)', '', 'ignorecase');
     
-    if contains(core, 'SoC'), sym = 'SoC'; unit='\%'; val=val*100;
-    elseif contains(core, 'tank') || contains(core, 'Estanque'), sym = 'V_{Tank}'; unit='L';
-    elseif contains(core, 'P_dem'), sym = 'P_{L}'; unit='kW';
-    elseif contains(core, 'P_gen'), sym = 'P_{G}'; unit='kW';
-    elseif contains(core, 'Q_dem'), sym = 'Q_{L}'; unit='L/s';
-    elseif contains(core, 'aq'), sym = 'EAW'; unit='L';
-    else, sym = 'X'; unit=''; end
+    if contains(core_name, 'SoC', 'IgnoreCase', true)
+        sym = 'SoC'; val_fmt = '%.1f\\%%'; val = val * 100;
+    elseif contains(core_name, 'tank', 'IgnoreCase', true) || contains(core_name, 'Estanque', 'IgnoreCase', true)
+        sym = 'V_{Tank}'; val_fmt='%.0f L';
+    elseif contains(core_name, 'P_dem', 'IgnoreCase', true)
+        sym = 'P_{L}'; val_fmt='%.1f kW';
+    elseif contains(core_name, 'P_gen', 'IgnoreCase', true)
+        sym = 'P_{G}'; val_fmt='%.1f kW';
+    elseif contains(core_name, 'Q_dem', 'IgnoreCase', true)
+        sym = 'Q_{L}'; val_fmt='%.2f L/s';
+    elseif contains(core_name, 'aq', 'IgnoreCase', true)
+        sym = 'EAW'; val_fmt='%.0f L';
+    else
+        sym = 'X'; val_fmt='%.2f'; 
+    end
     
-    % Decoradores matemáticos
-    if is_mean, sym = ['\bar{' sym '}']; end
-    if is_max, sym = ['\hat{' sym '}']; end
-    if is_std, sym = ['\sigma(' sym ')']; end
+    if is_mean
+        final_sym = sprintf('\\bar{%s}', sym); 
+    elseif is_max
+        final_sym = sprintf('{%s}_{\\max}', sym);
+    elseif is_std
+        final_sym = sprintf('\\sigma(%s)', sym);
+    else
+        final_sym = sym; 
+    end
     
-    % Subíndice Agente
-    if contains(raw, 'MG1'), sub='1'; elseif contains(raw, 'MG2'), sub='2'; elseif contains(raw, 'MG3'), sub='3'; else, sub=''; end
-    if ~isempty(sub), sym = [sym '^{' sub '}']; end
+    val_str = sprintf(val_fmt, val);
     
-    lbl = sprintf('$%s$ (%.1f%s)', sym, val, unit);
+    if contains(raw_name, 'MG1'), sub='1'; elseif contains(raw_name, 'MG2'), sub='2'; elseif contains(raw_name, 'MG3'), sub='3'; else, sub=''; end
+    
+    if ~isempty(sub)
+        label = sprintf('$%s^{%s}$ (%s)', final_sym, sub, val_str);
+    else
+        label = sprintf('$%s$ (%s)', final_sym, val_str);
+    end
 end
 
 
@@ -248,7 +306,7 @@ function create_ranking_plot(weights, errors, labels, title_txt, d, h, m, val, m
     
     fig = figure('Visible','off','Units','inches','Position',[0 0 7 6],'Color','w');
     
-    % Colores barras (Positivo/Negativo)
+    % Colores barras
     cdata = repmat([0.466 0.674 0.188], N, 1);
     cdata(weights < 0, :) = repmat([0.635 0.078 0.184], sum(weights<0), 1);
     
@@ -260,15 +318,17 @@ function create_ranking_plot(weights, errors, labels, title_txt, d, h, m, val, m
     
     xlabel('Influence Weight', 'FontName','Times New Roman', 'FontSize',10, 'FontWeight','bold');
     
-    % TÍTULO CON MÉTRICAS
+    % TÍTULO SEGURO PARA LATEX
     stats_str = sprintf('$R^2=%.2f$ | RBO=%.2f | Runs=%d', r2, rbo, runs);
-    full_title = {['\bf ' title_txt]; ...
+    full_title = {['LIME Analysis: ' title_txt]; ...
                   sprintf('Target: MG%d | Day %d, %02d:%02d | %s = %.2f', mg, d, h, m, target_sym, val); ...
-                  ['\rm\fontsize{9} ' stats_str]};
+                  stats_str};
               
     title(full_title, 'Interpreter','latex', 'FontName','Times New Roman', 'FontSize',11);
     
-    grid on; xline(0, 'k-');
+    xlim_val = max(abs(weights))*1.2; if xlim_val<1e-6, xlim_val=1; end
+    xlim([-xlim_val, xlim_val]); xline(0,'k-'); grid on;
+    
     exportgraphics(fig, [fname '.pdf'], 'ContentType','vector'); close(fig);
 end
 
@@ -279,15 +339,16 @@ function create_interaction_plot(pct, colors, title_txt, d, h, m, val, mg, targe
     
     b = bar(1:4, pct, 0.6, 'FaceColor','flat'); b.CData = colors;
     
-    ylabel('Influence Share [%]', 'FontName','Times New Roman','FontSize',10,'FontWeight','bold');
+    ylabel('Relative Total Influence [\%]', 'Interpreter', 'latex', 'FontName','Times New Roman','FontSize',10,'FontWeight','bold');
     xticks(1:4); xticklabels({'MG1','MG2','MG3','Aquifer'}); ylim([0 100]); grid on;
     
-    for i=1:4, text(i, pct(i)+3, sprintf('%.1f%%',pct(i)), 'HorizontalAlignment','center','FontSize',9); end
+    for i=1:4, text(i, pct(i)+3, sprintf('%.1f\\%%',pct(i)), 'Interpreter', 'latex', 'HorizontalAlignment','center','FontSize',9); end
     
+    % TÍTULO SEGURO PARA LATEX
     stats_str = sprintf('$R^2=%.2f$ | RBO=%.2f | Runs=%d', r2, rbo, runs);
-    full_title = {['\bf Interaction: ' title_txt]; ...
+    full_title = {['Interaction: ' title_txt]; ...
                   sprintf('Target: MG%d | Day %d, %02d:%02d | %s = %.2f', mg, d, h, m, target_sym, val); ...
-                  ['\rm\fontsize{9} ' stats_str]};
+                  stats_str};
               
     title(full_title, 'Interpreter','latex', 'FontName','Times New Roman', 'FontSize',11);
     
